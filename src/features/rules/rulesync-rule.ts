@@ -20,6 +20,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../../utils/frontmatter.
 export const RulesyncRuleFrontmatterSchema = z.object({
   root: z.optional(z.boolean()),
   localRoot: z.optional(z.boolean()),
+  reference: z.optional(z.boolean()),
   targets: z._default(RulesyncTargetsSchema, ["*"]),
   description: z.optional(z.string()),
   globs: z.optional(z.array(z.string())),
@@ -164,6 +165,7 @@ export class RulesyncRule extends RulesyncFile {
       globs: result.data.globs ?? [],
       agentsmd: result.data.agentsmd,
       cursor: result.data.cursor,
+      reference: result.data.reference,
     };
 
     return new RulesyncRule({

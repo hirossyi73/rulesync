@@ -1010,7 +1010,42 @@ export class RulesProcessor extends FeatureProcessor {
       })();
       logger.debug(`Found ${nonRootToolRules.length} non-root tool rule files`);
 
-      return [...rootToolRules, ...localRootToolRules, ...nonRootToolRules];
+      // Load reference files for deletion (claudecode only)
+      const referenceToolRules = await (async () => {
+        if (!forDeletion) {
+          return [];
+        }
+
+        const referencePath =
+          "reference" in settablePaths ? (settablePaths as { reference?: { relativeDirPath: string } }).reference : null;
+        if (!referencePath) {
+          return [];
+        }
+
+        const referenceBaseDir = join(this.baseDir, referencePath.relativeDirPath);
+        const referenceFilePaths = await findFilesByGlobs(
+          join(referenceBaseDir, "**", `*.${factory.meta.extension}`),
+        );
+
+        return referenceFilePaths
+          .map((filePath) => {
+            const relativeFilePath = relative(referenceBaseDir, filePath);
+            checkPathTraversal({
+              relativePath: relativeFilePath,
+              intendedRootDir: referenceBaseDir,
+            });
+            return factory.class.forDeletion({
+              baseDir: this.baseDir,
+              relativeDirPath: referencePath.relativeDirPath,
+              relativeFilePath,
+              global: this.global,
+            });
+          })
+          .filter((rule) => rule.isDeletable());
+      })();
+      logger.debug(`Found ${referenceToolRules.length} reference tool rule files for deletion`);
+
+      return [...rootToolRules, ...localRootToolRules, ...nonRootToolRules, ...referenceToolRules];
     } catch (error) {
       logger.error(`Failed to load tool files for ${this.toolTarget}: ${formatError(error)}`);
       return [];
@@ -1044,7 +1079,7 @@ export class RulesProcessor extends FeatureProcessor {
   }
 
   private generateToonReferencesSection(toolRules: ToolRule[]): string {
-    const toolRulesWithoutRoot = toolRules.filter((rule) => !rule.isRoot());
+    const toolRulesWithoutRoot = toolRules.filter((rule) => !rule.isRoot() && !rule.isReference());
 
     if (toolRulesWithoutRoot.length === 0) {
       return "";
@@ -1088,7 +1123,7 @@ export class RulesProcessor extends FeatureProcessor {
   }
 
   private generateReferencesSection(toolRules: ToolRule[]): string {
-    const toolRulesWithoutRoot = toolRules.filter((rule) => !rule.isRoot());
+    const toolRulesWithoutRoot = toolRules.filter((rule) => !rule.isRoot() && !rule.isReference());
 
     if (toolRulesWithoutRoot.length === 0) {
       return "";

@@ -11,6 +11,7 @@ import { RulesyncRule } from "./rulesync-rule.js";
 
 export type ToolRuleParams = AiFileParams & {
   root?: boolean | undefined;
+  reference?: boolean | undefined;
   description?: string | undefined;
   globs?: string[] | undefined;
 };
@@ -74,12 +75,14 @@ type BuildToolRuleParamsResult = Omit<ToolRuleParams, "root"> & {
 
 export abstract class ToolRule extends ToolFile {
   protected readonly root: boolean;
+  protected readonly reference: boolean;
   protected readonly description?: string | undefined;
   protected readonly globs?: string[] | undefined;
 
-  constructor({ root = false, description, globs, ...rest }: ToolRuleParams) {
+  constructor({ root = false, reference = false, description, globs, ...rest }: ToolRuleParams) {
     super(rest);
     this.root = root;
+    this.reference = reference;
     this.description = description;
     this.globs = globs;
   }
@@ -189,6 +192,10 @@ export abstract class ToolRule extends ToolFile {
 
   isRoot(): boolean {
     return this.root;
+  }
+
+  isReference(): boolean {
+    return this.reference;
   }
 
   getDescription(): string | undefined {

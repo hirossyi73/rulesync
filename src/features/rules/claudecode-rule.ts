@@ -46,6 +46,9 @@ export type ClaudecodeRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & 
   nonRoot: {
     relativeDirPath: string;
   };
+  reference: {
+    relativeDirPath: string;
+  };
 };
 
 export type ClaudecodeRuleSettablePathsGlobal = ToolRuleSettablePathsGlobal;
@@ -94,6 +97,9 @@ export class ClaudecodeRule extends ToolRule {
       ],
       nonRoot: {
         relativeDirPath: buildToolPath(".claude", "rules", excludeToolDir),
+      },
+      reference: {
+        relativeDirPath: buildToolPath(".claude", "references", excludeToolDir),
       },
     };
   }
@@ -208,6 +214,7 @@ export class ClaudecodeRule extends ToolRule {
   }: ToolRuleFromRulesyncRuleParams): ClaudecodeRule {
     const rulesyncFrontmatter = rulesyncRule.getFrontmatter();
     const root = rulesyncFrontmatter.root ?? false;
+    const isReference = rulesyncFrontmatter.reference ?? false;
     const paths = this.getSettablePaths({ global });
 
     // Convert globs to paths format
@@ -216,8 +223,9 @@ export class ClaudecodeRule extends ToolRule {
     const globs = rulesyncFrontmatter.globs;
     const pathsValue = claudecodePaths ?? (globs?.length ? globs : undefined);
 
+    // Reference files should not have paths frontmatter (not auto-loaded by Claude Code)
     const claudecodeFrontmatter: ClaudecodeRuleFrontmatter = {
-      paths: root ? undefined : pathsValue,
+      paths: root || isReference ? undefined : pathsValue,
     };
 
     const body = rulesyncRule.getBody();
@@ -231,6 +239,20 @@ export class ClaudecodeRule extends ToolRule {
         relativeFilePath: paths.root.relativeFilePath,
         validate,
         root,
+      });
+    }
+
+    // Reference files go to .claude/references/ instead of .claude/rules/
+    if (isReference && "reference" in paths && paths.reference) {
+      return new ClaudecodeRule({
+        baseDir,
+        frontmatter: claudecodeFrontmatter,
+        body,
+        relativeDirPath: paths.reference.relativeDirPath,
+        relativeFilePath: rulesyncRule.getRelativeFilePath(),
+        validate,
+        root,
+        reference: true,
       });
     }
 
