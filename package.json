@@ -65,7 +65,7 @@
     "knip": "knip",
     "oxlint": "oxlint . --max-warnings 0",
     "oxlint:fix": "oxlint . --fix --max-warnings 0",
-    "prepare": "simple-git-hooks && pnpm generate",
+    "prepare": "simple-git-hooks && pnpm run build && pnpm generate",
     "prepublishOnly": "pnpm build",
     "secretlint": "secretlint --secretlintignore .gitignore \"**/*\"",
     "sort": "sort-package-json",
