@@ -40,10 +40,16 @@ export type CopilotRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & {
   nonRoot: {
     relativeDirPath: string;
   };
+  reference: {
+    relativeDirPath: string;
+  };
 };
 
 export type CopilotRuleSettablePathsGlobal = ToolRuleSettablePathsGlobal & {
   nonRoot: {
+    relativeDirPath: string;
+  };
+  reference: {
     relativeDirPath: string;
   };
 };
@@ -77,6 +83,9 @@ export class CopilotRule extends ToolRule {
         nonRoot: {
           relativeDirPath: buildToolPath(".copilot", "instructions", options.excludeToolDir),
         },
+        reference: {
+          relativeDirPath: buildToolPath(".copilot", "references", options.excludeToolDir),
+        },
       };
     }
     return {
@@ -86,6 +95,9 @@ export class CopilotRule extends ToolRule {
       },
       nonRoot: {
         relativeDirPath: buildToolPath(".github", "instructions", options.excludeToolDir),
+      },
+      reference: {
+        relativeDirPath: buildToolPath(".github", "references", options.excludeToolDir),
       },
     };
   }
@@ -103,8 +115,8 @@ export class CopilotRule extends ToolRule {
 
     super({
       ...rest,
-      // If the rule is a root rule, the file content does not contain frontmatter.
-      fileContent: rest.root ? body : stringifyFrontmatter(body, frontmatter),
+      // Root and reference files are read directly, so keep them as plain Markdown.
+      fileContent: rest.root || rest.reference ? body : stringifyFrontmatter(body, frontmatter),
     });
 
     this.frontmatter = frontmatter;
@@ -153,6 +165,7 @@ export class CopilotRule extends ToolRule {
   }: ToolRuleFromRulesyncRuleParams): CopilotRule {
     const rulesyncFrontmatter = rulesyncRule.getFrontmatter();
     const root = rulesyncFrontmatter.root;
+    const isReference = rulesyncFrontmatter.reference ?? false;
     const paths = this.getSettablePaths({ global });
 
     const copilotFrontmatter: CopilotRuleFrontmatter = {
@@ -174,6 +187,19 @@ export class CopilotRule extends ToolRule {
         relativeFilePath: paths.root.relativeFilePath,
         validate,
         root,
+      });
+    }
+
+    if (isReference && "reference" in paths && paths.reference) {
+      return new CopilotRule({
+        baseDir: baseDir,
+        frontmatter: copilotFrontmatter,
+        body,
+        relativeDirPath: paths.reference.relativeDirPath,
+        relativeFilePath: rulesyncRule.getRelativeFilePath(),
+        validate,
+        root: false,
+        reference: true,
       });
     }
 

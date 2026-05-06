@@ -154,6 +154,10 @@ describe("CopilotRule", () => {
       expect(paths.nonRoot).toEqual({
         relativeDirPath: ".github/instructions",
       });
+
+      expect(paths.reference).toEqual({
+        relativeDirPath: ".github/references",
+      });
     });
 
     it("should have consistent paths structure", () => {
@@ -161,9 +165,11 @@ describe("CopilotRule", () => {
 
       expect(paths).toHaveProperty("root");
       expect(paths).toHaveProperty("nonRoot");
+      expect(paths).toHaveProperty("reference");
       expect(paths.root).toHaveProperty("relativeDirPath");
       expect(paths.root).toHaveProperty("relativeFilePath");
       expect(paths.nonRoot).toHaveProperty("relativeDirPath");
+      expect(paths.reference).toHaveProperty("relativeDirPath");
     });
   });
 
@@ -179,6 +185,10 @@ describe("CopilotRule", () => {
       expect(paths).toHaveProperty("nonRoot");
       expect(paths.nonRoot).toEqual({
         relativeDirPath: ".copilot/instructions",
+      });
+      expect(paths).toHaveProperty("reference");
+      expect(paths.reference).toEqual({
+        relativeDirPath: ".copilot/references",
       });
     });
 
@@ -326,6 +336,39 @@ describe("CopilotRule", () => {
       expect(copilotRule.getRelativeDirPath()).toBe(".github/instructions");
       expect(copilotRule.getRelativeFilePath()).toBe("test.instructions.md");
       expect(copilotRule.isRoot()).toBe(false);
+    });
+
+    it("should create reference CopilotRule from reference RulesyncRule", () => {
+      const rulesyncRule = new RulesyncRule({
+        baseDir: testDir,
+        relativeDirPath: "rules",
+        relativeFilePath: "security.md",
+        frontmatter: {
+          targets: ["*"],
+          root: false,
+          reference: true,
+          description: "Detailed security reference",
+          globs: ["*.js", "*.ts"],
+        },
+        body: "Reference rulesync rule content",
+        validate: true,
+      });
+
+      const copilotRule = CopilotRule.fromRulesyncRule({
+        baseDir: testDir,
+        rulesyncRule,
+        validate: true,
+      });
+
+      expect(copilotRule.getFrontmatter()).toEqual({
+        description: "Detailed security reference",
+        applyTo: "*.js,*.ts",
+      });
+      expect(copilotRule.getFileContent()).toBe("Reference rulesync rule content");
+      expect(copilotRule.getBody()).toBe("Reference rulesync rule content");
+      expect(copilotRule.getRelativeDirPath()).toBe(".github/references");
+      expect(copilotRule.getRelativeFilePath()).toBe("security.md");
+      expect(copilotRule.isReference()).toBe(true);
     });
 
     it("should create root CopilotRule from root RulesyncRule", () => {

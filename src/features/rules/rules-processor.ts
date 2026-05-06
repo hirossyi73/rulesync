@@ -1017,7 +1017,9 @@ export class RulesProcessor extends FeatureProcessor {
         }
 
         const referencePath =
-          "reference" in settablePaths ? (settablePaths as { reference?: { relativeDirPath: string } }).reference : null;
+          "reference" in settablePaths
+            ? (settablePaths as { reference?: { relativeDirPath: string } }).reference
+            : null;
         if (!referencePath) {
           return [];
         }

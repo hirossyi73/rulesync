@@ -18,6 +18,9 @@ export type CodexcliRuleSettablePaths = ToolRuleSettablePaths & {
     relativeDirPath: string;
     relativeFilePath: string;
   };
+  reference: {
+    relativeDirPath: string;
+  };
 };
 
 export type CodexcliRuleSettablePathsGlobal = ToolRuleSettablePathsGlobal;
@@ -52,6 +55,9 @@ export class CodexcliRule extends ToolRule {
       },
       nonRoot: {
         relativeDirPath: buildToolPath(".codex", "memories", excludeToolDir),
+      },
+      reference: {
+        relativeDirPath: buildToolPath(".codex", "references", excludeToolDir),
       },
     };
   }
@@ -104,6 +110,23 @@ export class CodexcliRule extends ToolRule {
     global = false,
   }: ToolRuleFromRulesyncRuleParams): CodexcliRule {
     const paths = this.getSettablePaths({ global });
+    const rulesyncFrontmatter = rulesyncRule.getFrontmatter();
+    const root = rulesyncFrontmatter.root ?? false;
+
+    if (!root && rulesyncFrontmatter.reference && "reference" in paths && paths.reference) {
+      return new CodexcliRule({
+        baseDir,
+        relativeDirPath: paths.reference.relativeDirPath,
+        relativeFilePath: rulesyncRule.getRelativeFilePath(),
+        fileContent: rulesyncRule.getBody(),
+        validate,
+        root: false,
+        reference: true,
+        description: rulesyncFrontmatter.description,
+        globs: rulesyncFrontmatter.globs,
+      });
+    }
+
     return new CodexcliRule(
       this.buildToolRuleParamsAgentsmd({
         baseDir,
