@@ -18,9 +18,9 @@ Add `reference: true` to the frontmatter of any `.rulesync/rules/*.md` file:
 ---
 root: false
 reference: true
-targets: ['*']
-description: 'Detailed security guidelines (OWASP Top 10, secret management)'
-globs: ['**/*']
+targets: ["*"]
+description: "Detailed security guidelines (OWASP Top 10, secret management)"
+globs: ["**/*"]
 ---
 
 # Security Guidelines
@@ -30,15 +30,19 @@ globs: ['**/*']
 
 ### Generated Output
 
-| Tool | Normal Rule Output | Reference Rule Output |
-|---|---|---|
-| Claude Code | `.claude/rules/<name>.md` | `.claude/references/<name>.md` |
-| Other tools (agentsmd, copilot, etc.) | Normal behavior | Excluded from generated output |
+| Tool                         | Normal Rule Output                            | Reference Rule Output          |
+| ---------------------------- | --------------------------------------------- | ------------------------------ |
+| Claude Code                  | `.claude/rules/<name>.md`                     | `.claude/references/<name>.md` |
+| Codex CLI                    | `.codex/memories/<name>.md`                   | `.codex/references/<name>.md`  |
+| GitHub Copilot               | `.github/instructions/<name>.instructions.md` | `.github/references/<name>.md` |
+| Other tools (agentsmd, etc.) | Normal behavior                               | Excluded from generated output |
 
 For Claude Code specifically:
 
 - **Normal rules** are generated with `paths` frontmatter, causing Claude Code to auto-load them when matching files are accessed.
 - **Reference rules** are generated **without `paths` frontmatter** and placed in `.claude/references/`. Claude Code does not auto-load these files.
+
+For Codex CLI and GitHub Copilot, reference rules are generated as plain Markdown files in each tool's `references/` directory so they are available for direct reads without being part of the normal auto-loaded rule set.
 
 ### AGENTS.md / Copilot
 
@@ -52,7 +56,7 @@ If your project has many detailed rules (e.g., security checklists, design stand
 
 ### Template / Base Projects
 
-For projects that serve as a template (where `.rulesync/` source files are not deployed to target environments), reference rules ensure that detailed guidelines are included in the generated output and available at the deployment target via `.claude/references/`.
+For projects that serve as a template (where `.rulesync/` source files are not deployed to target environments), reference rules ensure that detailed guidelines are included in the generated output and available at the deployment target via the tool-specific `references/` directory.
 
 ## Usage in Subagents and Skills
 
@@ -64,21 +68,21 @@ For detailed security review criteria, read `.claude/references/security.md`.
 
 ## Which Rules Should Be References?
 
-| Rule Type | `reference: true`? | Reason |
-|---|---|---|
-| Core conventions (naming, git workflow) | No | Needed in every session |
-| Error handling patterns | No | Frequently referenced during coding |
-| Detailed security checklists (OWASP) | **Yes** | Long, only needed during security review |
-| Detailed design standards | **Yes** | Long, only needed during planning/review |
-| Implementation plan templates | **Yes** | Only needed by planner agents |
-| Requirements standards | **Yes** | Only needed by planner agents |
+| Rule Type                               | `reference: true`? | Reason                                   |
+| --------------------------------------- | ------------------ | ---------------------------------------- |
+| Core conventions (naming, git workflow) | No                 | Needed in every session                  |
+| Error handling patterns                 | No                 | Frequently referenced during coding      |
+| Detailed security checklists (OWASP)    | **Yes**            | Long, only needed during security review |
+| Detailed design standards               | **Yes**            | Long, only needed during planning/review |
+| Implementation plan templates           | **Yes**            | Only needed by planner agents            |
+| Requirements standards                  | **Yes**            | Only needed by planner agents            |
 
 The goal is to keep **always-loaded rules under the context limit** while making detailed references available on demand.
 
 ## Frontmatter Reference
 
-| Field | Type | Default | Description |
-|---|---|---|---|
+| Field       | Type      | Default | Description                                                           |
+| ----------- | --------- | ------- | --------------------------------------------------------------------- |
 | `reference` | `boolean` | `false` | When `true`, the rule is output as a reference file (not auto-loaded) |
 
 This field can be combined with other frontmatter fields:
@@ -87,9 +91,9 @@ This field can be combined with other frontmatter fields:
 ---
 root: false
 reference: true
-targets: ['claudecode']
-description: 'Detailed implementation plan standards'
-globs: ['**/*']
+targets: ["claudecode"]
+description: "Detailed implementation plan standards"
+globs: ["**/*"]
 ---
 ```
 

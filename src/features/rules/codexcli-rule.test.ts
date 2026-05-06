@@ -199,6 +199,33 @@ This is a specific memory configuration.
       expect(codexcliRule.getBaseDir()).toBe(testDir);
     });
 
+    it("should create reference CodexcliRule from reference RulesyncRule", () => {
+      const rulesyncRule = new RulesyncRule({
+        baseDir: testDir,
+        relativeDirPath: "rules",
+        relativeFilePath: "security.md",
+        frontmatter: {
+          root: false,
+          reference: true,
+          targets: ["*"],
+          description: "Detailed security reference",
+          globs: ["**/*"],
+        },
+        body: "Reference rule body content",
+        validate: false,
+      });
+
+      const codexcliRule = CodexcliRule.fromRulesyncRule({
+        baseDir: testDir,
+        rulesyncRule,
+      });
+
+      expect(codexcliRule.getFileContent()).toBe("Reference rule body content");
+      expect(codexcliRule.getRelativeFilePath()).toBe("security.md");
+      expect(codexcliRule.getRelativeDirPath()).toBe(".codex/references");
+      expect(codexcliRule.isReference()).toBe(true);
+    });
+
     it("should handle empty body content", () => {
       const rulesyncRule = new RulesyncRule({
         baseDir: testDir,
@@ -581,6 +608,14 @@ More detailed instructions here.`;
       expect(paths.nonRoot).toEqual({
         relativeDirPath: ".codex/memories",
       });
+
+      expect(paths).toHaveProperty("reference");
+      if (!("reference" in paths)) {
+        throw new Error("Expected reference path to be set");
+      }
+      expect(paths.reference).toEqual({
+        relativeDirPath: ".codex/references",
+      });
     });
 
     it("should have consistent paths structure", () => {
@@ -588,9 +623,14 @@ More detailed instructions here.`;
 
       expect(paths).toHaveProperty("root");
       expect(paths).toHaveProperty("nonRoot");
+      expect(paths).toHaveProperty("reference");
       expect(paths.root).toHaveProperty("relativeDirPath");
       expect(paths.root).toHaveProperty("relativeFilePath");
       expect(paths.nonRoot).toHaveProperty("relativeDirPath");
+      if (!("reference" in paths)) {
+        throw new Error("Expected reference path to be set");
+      }
+      expect(paths.reference).toHaveProperty("relativeDirPath");
     });
   });
 
