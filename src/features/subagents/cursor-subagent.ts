@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { CURSOR_AGENTS_DIR_PATH } from "../../constants/cursor-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
@@ -19,6 +20,9 @@ import {
 const CursorSubagentFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.optional(z.string()),
+  model: z.optional(z.string()),
+  readonly: z.optional(z.boolean()),
+  is_background: z.optional(z.boolean()),
 });
 
 type CursorSubagentFrontmatter = z.infer<typeof CursorSubagentFrontmatterSchema>;
@@ -52,7 +56,7 @@ export class CursorSubagent extends ToolSubagent {
 
   static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
     return {
-      relativeDirPath: join(".cursor", "agents"),
+      relativeDirPath: CURSOR_AGENTS_DIR_PATH,
     };
   }
 
@@ -77,7 +81,7 @@ export class CursorSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".", // RulesyncSubagent baseDir is always the project root directory
+      outputRoot: ".", // RulesyncSubagent outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
@@ -87,7 +91,7 @@ export class CursorSubagent extends ToolSubagent {
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -102,11 +106,11 @@ export class CursorSubagent extends ToolSubagent {
     };
 
     const body = rulesyncSubagent.getBody();
-    const fileContent = stringifyFrontmatter(body, cursorFrontmatter);
+    const fileContent = stringifyFrontmatter(body, cursorFrontmatter, { avoidBlockScalars: true });
     const paths = this.getSettablePaths({ global });
 
     return new CursorSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: cursorFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
@@ -143,13 +147,13 @@ export class CursorSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<CursorSubagent> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
 
@@ -159,7 +163,7 @@ export class CursorSubagent extends ToolSubagent {
     }
 
     return new CursorSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: relativeFilePath,
       frontmatter: result.data,
@@ -171,12 +175,12 @@ export class CursorSubagent extends ToolSubagent {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): CursorSubagent {
     return new CursorSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { name: "", description: "" },

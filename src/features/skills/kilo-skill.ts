@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod/mini";
 
 import { SKILL_FILE_NAME } from "../../constants/general.js";
+import { KILO_SKILLS_DIR_PATH } from "../../constants/kilo-paths.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
 import { formatError } from "../../utils/error.js";
@@ -15,15 +16,23 @@ import {
   ToolSkillSettablePaths,
 } from "./tool-skill.js";
 
-const KiloSkillFrontmatterSchema = z.looseObject({
+export const KiloSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
+  // Kilo's official SKILL.md frontmatter: `name`, `description`, `license`,
+  // `compatibility`, and `metadata`. https://kilo.ai/docs/customize/skills
+  license: z.optional(z.string()),
+  compatibility: z.optional(z.looseObject({})),
+  metadata: z.optional(z.looseObject({})),
+  // `allowed-tools` is NOT recognized by Kilo; it is retained for backward
+  // compatibility with existing rulesync skill files.
+  "allowed-tools": z.optional(z.array(z.string())),
 });
 
-type KiloSkillFrontmatter = z.infer<typeof KiloSkillFrontmatterSchema>;
+export type KiloSkillFrontmatter = z.infer<typeof KiloSkillFrontmatterSchema>;
 
-type KiloSkillParams = {
-  baseDir?: string;
+export type KiloSkillParams = {
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: KiloSkillFrontmatter;
@@ -33,14 +42,10 @@ type KiloSkillParams = {
   global?: boolean;
 };
 
-/**
- * Represents a Kilo Code skill directory.
- * Skills are stored under .kilocode/skills/ directories with SKILL.md files.
- */
 export class KiloSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".kilocode", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = KILO_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -49,7 +54,7 @@ export class KiloSkill extends ToolSkill {
     global = false,
   }: KiloSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -69,13 +74,11 @@ export class KiloSkill extends ToolSkill {
     }
   }
 
-  static getSettablePaths({
-    global: _global = false,
-  }: {
-    global?: boolean;
-  } = {}): ToolSkillSettablePaths {
+  static getSettablePaths(_options?: { global?: boolean }): ToolSkillSettablePaths {
     return {
-      relativeDirPath: join(".kilocode", "skills"),
+      // Kilo reads skills from `.kilo/skills` for project scope and `~/.kilo/skills`
+      // for global scope (same relative path, different base directory).
+      relativeDirPath: KILO_SKILLS_DIR_PATH,
     };
   }
 
@@ -89,13 +92,12 @@ export class KiloSkill extends ToolSkill {
   }
 
   validate(): ValidationResult {
-    if (!this.mainFile) {
+    if (this.mainFile === undefined) {
       return {
         success: false,
         error: new Error(`${this.getDirPath()}: ${SKILL_FILE_NAME} file does not exist`),
       };
     }
-
     const result = KiloSkillFrontmatterSchema.safeParse(this.mainFile.frontmatter);
     if (!result.success) {
       return {
@@ -106,28 +108,30 @@ export class KiloSkill extends ToolSkill {
       };
     }
 
-    if (result.data.name !== this.getDirName()) {
-      return {
-        success: false,
-        error: new Error(
-          `${this.getDirPath()}: frontmatter name (${result.data.name}) must match directory name (${this.getDirName()})`,
-        ),
-      };
-    }
-
     return { success: true, error: null };
   }
 
   toRulesyncSkill(): RulesyncSkill {
     const frontmatter = this.getFrontmatter();
+    const kiloBlock = {
+      ...(frontmatter["allowed-tools"] !== undefined && {
+        "allowed-tools": frontmatter["allowed-tools"],
+      }),
+      ...(frontmatter.license !== undefined && { license: frontmatter.license }),
+      ...(frontmatter.compatibility !== undefined && {
+        compatibility: frontmatter.compatibility,
+      }),
+      ...(frontmatter.metadata !== undefined && { metadata: frontmatter.metadata }),
+    };
     const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
       name: frontmatter.name,
       description: frontmatter.description,
       targets: ["*"],
+      ...(Object.keys(kiloBlock).length > 0 && { kilo: kiloBlock }),
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -139,23 +143,33 @@ export class KiloSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
   }: ToolSkillFromRulesyncSkillParams): KiloSkill {
-    const settablePaths = KiloSkill.getSettablePaths({ global });
     const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+    const kiloSection = rulesyncFrontmatter.kilo;
 
     const kiloFrontmatter: KiloSkillFrontmatter = {
       name: rulesyncFrontmatter.name,
       description: rulesyncFrontmatter.description,
+      ...(kiloSection?.["allowed-tools"] !== undefined && {
+        "allowed-tools": kiloSection["allowed-tools"],
+      }),
+      ...(kiloSection?.license !== undefined && { license: kiloSection.license }),
+      ...(kiloSection?.compatibility !== undefined && {
+        compatibility: kiloSection.compatibility,
+      }),
+      ...(kiloSection?.metadata !== undefined && { metadata: kiloSection.metadata }),
     };
 
+    const settablePaths = KiloSkill.getSettablePaths({ global });
+
     return new KiloSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
-      dirName: kiloFrontmatter.name,
+      dirName: rulesyncSkill.getDirName(),
       frontmatter: kiloFrontmatter,
       body: rulesyncSkill.getBody(),
       otherFiles: rulesyncSkill.getOtherFiles(),
@@ -177,26 +191,14 @@ export class KiloSkill extends ToolSkill {
 
     const result = KiloSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
     }
 
-    if (result.data.name !== loaded.dirName) {
-      const skillFilePath = join(
-        loaded.baseDir,
-        loaded.relativeDirPath,
-        loaded.dirName,
-        SKILL_FILE_NAME,
-      );
-      throw new Error(
-        `Frontmatter name (${result.data.name}) must match directory name (${loaded.dirName}) in ${skillFilePath}`,
-      );
-    }
-
     return new KiloSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -208,13 +210,13 @@ export class KiloSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): KiloSkill {
     return new KiloSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

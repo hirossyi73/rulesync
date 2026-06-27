@@ -12,7 +12,7 @@ const originalCwd = process.cwd();
 export const execFileAsync = promisify(execFile);
 
 // Get the command to run from environment variable
-// Default to using tsx directly with the CLI entry point
+// Default to running the TypeScript CLI entry point via tsx
 const tsxPath = join(originalCwd, "node_modules", ".bin", "tsx");
 const cliPath = join(originalCwd, "src", "cli", "index.ts");
 
@@ -44,11 +44,23 @@ export async function runGenerate({
   target,
   features,
   global = false,
+  deleteFiles = false,
+  check = false,
+  simulateCommands = false,
+  simulateSubagents = false,
+  simulateSkills = false,
+  inputRoot,
   env,
 }: {
   target: string;
   features: string;
   global?: boolean;
+  deleteFiles?: boolean;
+  check?: boolean;
+  simulateCommands?: boolean;
+  simulateSubagents?: boolean;
+  simulateSkills?: boolean;
+  inputRoot?: string;
   env?: Record<string, string>;
 }): Promise<{ stdout: string; stderr: string }> {
   const args = [
@@ -59,8 +71,28 @@ export async function runGenerate({
     "--features",
     features,
     ...(global ? ["--global"] : []),
+    ...(deleteFiles ? ["--delete"] : []),
+    ...(check ? ["--check"] : []),
+    ...(simulateCommands ? ["--simulate-commands"] : []),
+    ...(simulateSubagents ? ["--simulate-subagents"] : []),
+    ...(simulateSkills ? ["--simulate-skills"] : []),
+    ...(inputRoot ? ["--input-root", inputRoot] : []),
   ];
   return execFileAsync(rulesyncCmd, args, env ? { env: { ...process.env, ...env } } : {});
+}
+
+/**
+ * Runs the `rulesync import` command with the given target and feature.
+ */
+export async function runImport({
+  target,
+  features,
+}: {
+  target: string;
+  features: string;
+}): Promise<{ stdout: string; stderr: string }> {
+  const args = [...rulesyncArgs, "import", "--targets", target, "--features", features];
+  return execFileAsync(rulesyncCmd, args);
 }
 
 /**

@@ -2,16 +2,20 @@ import { z } from "zod/mini";
 
 import { RULESYNC_AIIGNORE_RELATIVE_FILE_PATH } from "../../constants/rulesync-paths.js";
 import { FeatureProcessor } from "../../types/feature-processor.js";
+import type { FeatureOptions } from "../../types/features.js";
 import { RulesyncFile } from "../../types/rulesync-file.js";
 import { ToolFile } from "../../types/tool-file.js";
+import { ignoreProcessorToolTargetTuple } from "../../types/tool-target-tuples.js";
 import { ToolTarget } from "../../types/tool-targets.js";
 import { formatError } from "../../utils/error.js";
-import { logger } from "../../utils/logger.js";
+import type { Logger } from "../../utils/logger.js";
+import { AiassistantIgnore } from "./aiassistant-ignore.js";
+import { AntigravityCliIgnore } from "./antigravity-cli-ignore.js";
 import { AugmentcodeIgnore } from "./augmentcode-ignore.js";
 import { ClaudecodeIgnore } from "./claudecode-ignore.js";
 import { ClineIgnore } from "./cline-ignore.js";
 import { CursorIgnore } from "./cursor-ignore.js";
-import { GeminiCliIgnore } from "./geminicli-ignore.js";
+import { DevinIgnore } from "./devin-ignore.js";
 import { GooseIgnore } from "./goose-ignore.js";
 import { JunieIgnore } from "./junie-ignore.js";
 import { KiloIgnore } from "./kilo-ignore.js";
@@ -25,30 +29,15 @@ import {
   ToolIgnoreFromFileParams,
   ToolIgnoreFromRulesyncIgnoreParams,
   ToolIgnoreSettablePaths,
+  ToolIgnoreSettablePathsParams,
 } from "./tool-ignore.js";
-import { WindsurfIgnore } from "./windsurf-ignore.js";
+import { VibeIgnore } from "./vibe-ignore.js";
+import { WarpIgnore } from "./warp-ignore.js";
 import { ZedIgnore } from "./zed-ignore.js";
 
-const ignoreProcessorToolTargets: ToolTarget[] = [
-  "augmentcode",
-  "claudecode",
-  "claudecode-legacy",
-  "cline",
-  "cursor",
-  "geminicli",
-  "goose",
-  "junie",
-  "kilo",
-  "kiro",
-  "qwencode",
-  "roo",
-  "windsurf",
-  "zed",
-];
+export type IgnoreProcessorToolTarget = (typeof ignoreProcessorToolTargetTuple)[number];
 
-export const IgnoreProcessorToolTargetSchema = z.enum(ignoreProcessorToolTargets);
-
-export type IgnoreProcessorToolTarget = z.infer<typeof IgnoreProcessorToolTargetSchema>;
+export const IgnoreProcessorToolTargetSchema = z.enum(ignoreProcessorToolTargetTuple);
 
 type ToolIgnoreFactory = {
   class: {
@@ -57,26 +46,33 @@ type ToolIgnoreFactory = {
     ): ToolIgnore | Promise<ToolIgnore>;
     fromFile(params: ToolIgnoreFromFileParams): Promise<ToolIgnore>;
     forDeletion(params: ToolIgnoreForDeletionParams): ToolIgnore;
-    getSettablePaths(): ToolIgnoreSettablePaths;
+    getSettablePaths(params?: ToolIgnoreSettablePathsParams): ToolIgnoreSettablePaths;
   };
 };
 
-const toolIgnoreFactories = new Map<IgnoreProcessorToolTarget, ToolIgnoreFactory>([
+export const toolIgnoreFactories = new Map<IgnoreProcessorToolTarget, ToolIgnoreFactory>([
+  ["aiassistant", { class: AiassistantIgnore }],
+  ["antigravity-cli", { class: AntigravityCliIgnore }],
   ["augmentcode", { class: AugmentcodeIgnore }],
   ["claudecode", { class: ClaudecodeIgnore }],
   ["claudecode-legacy", { class: ClaudecodeIgnore }],
   ["cline", { class: ClineIgnore }],
   ["cursor", { class: CursorIgnore }],
-  ["geminicli", { class: GeminiCliIgnore }],
   ["goose", { class: GooseIgnore }],
   ["junie", { class: JunieIgnore }],
   ["kilo", { class: KiloIgnore }],
   ["kiro", { class: KiroIgnore }],
+  ["kiro-cli", { class: KiroIgnore }],
+  ["kiro-ide", { class: KiroIgnore }],
   ["qwencode", { class: QwencodeIgnore }],
   ["roo", { class: RooIgnore }],
-  ["windsurf", { class: WindsurfIgnore }],
+  ["devin", { class: DevinIgnore }],
+  ["vibe", { class: VibeIgnore }],
+  ["warp", { class: WarpIgnore }],
   ["zed", { class: ZedIgnore }],
 ]);
+
+const ignoreProcessorToolTargets: ToolTarget[] = [...toolIgnoreFactories.keys()];
 
 type GetFactory = (target: IgnoreProcessorToolTarget) => ToolIgnoreFactory;
 
@@ -91,19 +87,26 @@ const defaultGetFactory: GetFactory = (target) => {
 export class IgnoreProcessor extends FeatureProcessor {
   private readonly toolTarget: IgnoreProcessorToolTarget;
   private readonly getFactory: GetFactory;
+  private readonly featureOptions: FeatureOptions | undefined;
 
   constructor({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
+    inputRoot = process.cwd(),
     toolTarget,
     getFactory = defaultGetFactory,
     dryRun = false,
+    logger,
+    featureOptions,
   }: {
-    baseDir?: string;
+    outputRoot?: string;
+    inputRoot?: string;
     toolTarget: ToolTarget;
     getFactory?: GetFactory;
     dryRun?: boolean;
+    logger: Logger;
+    featureOptions?: FeatureOptions;
   }) {
-    super({ baseDir, dryRun });
+    super({ outputRoot, inputRoot, dryRun, logger });
     const result = IgnoreProcessorToolTargetSchema.safeParse(toolTarget);
     if (!result.success) {
       throw new Error(
@@ -112,6 +115,7 @@ export class IgnoreProcessor extends FeatureProcessor {
     }
     this.toolTarget = result.data;
     this.getFactory = getFactory;
+    this.featureOptions = featureOptions;
   }
 
   async writeToolIgnoresFromRulesyncIgnores(rulesyncIgnores: RulesyncIgnore[]): Promise<void> {
@@ -125,9 +129,9 @@ export class IgnoreProcessor extends FeatureProcessor {
    */
   async loadRulesyncFiles(): Promise<RulesyncFile[]> {
     try {
-      return [await RulesyncIgnore.fromFile()];
+      return [await RulesyncIgnore.fromFile({ outputRoot: this.inputRoot })];
     } catch (error) {
-      logger.error(
+      this.logger.error(
         `Failed to load rulesync ignore file (${RULESYNC_AIIGNORE_RELATIVE_FILE_PATH}): ${formatError(error)}`,
       );
       return [];
@@ -145,11 +149,11 @@ export class IgnoreProcessor extends FeatureProcessor {
   } = {}): Promise<ToolFile[]> {
     try {
       const factory = this.getFactory(this.toolTarget);
-      const paths = factory.class.getSettablePaths();
+      const paths = factory.class.getSettablePaths({ options: this.featureOptions });
 
       if (forDeletion) {
         const toolIgnore = factory.class.forDeletion({
-          baseDir: this.baseDir,
+          outputRoot: this.outputRoot,
           relativeDirPath: paths.relativeDirPath,
           relativeFilePath: paths.relativeFilePath,
         });
@@ -163,9 +167,9 @@ export class IgnoreProcessor extends FeatureProcessor {
     } catch (error) {
       const errorMessage = `Failed to load tool files for ${this.toolTarget}: ${formatError(error)}`;
       if (error instanceof Error && error.message.includes("no such file or directory")) {
-        logger.debug(errorMessage);
+        this.logger.debug(errorMessage);
       } else {
-        logger.error(errorMessage);
+        this.logger.error(errorMessage);
       }
       return [];
     }
@@ -173,7 +177,9 @@ export class IgnoreProcessor extends FeatureProcessor {
 
   async loadToolIgnores(): Promise<ToolIgnore[]> {
     const factory = this.getFactory(this.toolTarget);
-    return [await factory.class.fromFile({ baseDir: this.baseDir })];
+    return [
+      await factory.class.fromFile({ outputRoot: this.outputRoot, options: this.featureOptions }),
+    ];
   }
 
   /**
@@ -191,8 +197,9 @@ export class IgnoreProcessor extends FeatureProcessor {
 
     const factory = this.getFactory(this.toolTarget);
     const toolIgnore = await factory.class.fromRulesyncIgnore({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       rulesyncIgnore,
+      options: this.featureOptions,
     });
 
     return [toolIgnore];

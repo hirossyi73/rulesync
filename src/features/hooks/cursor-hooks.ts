@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { CURSOR_DIR, CURSOR_HOOKS_FILE_NAME } from "../../constants/cursor-paths.js";
 import type { AiFileParams } from "../../types/ai-file.js";
 import type { ValidationResult } from "../../types/ai-file.js";
 import type { HooksConfig } from "../../types/hooks.js";
@@ -31,23 +32,29 @@ export class CursorHooks extends ToolHooks {
     });
   }
 
-  static getSettablePaths(): ToolHooksSettablePaths {
+  static getSettablePaths(_options: { global?: boolean } = {}): ToolHooksSettablePaths {
+    // Cursor uses the same `.cursor/hooks.json` filename for both project and
+    // global scope. The only thing that changes is the resolution root
+    // (project root vs. home directory), which the harness handles by
+    // overriding `outputRoot` when `--global` is passed.
+    // Reference: https://cursor.com/docs/agent/hooks
     return {
-      relativeDirPath: ".cursor",
-      relativeFilePath: "hooks.json",
+      relativeDirPath: CURSOR_DIR,
+      relativeFilePath: CURSOR_HOOKS_FILE_NAME,
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
+    global = false,
   }: ToolHooksFromFileParams): Promise<CursorHooks> {
-    const paths = CursorHooks.getSettablePaths();
+    const paths = CursorHooks.getSettablePaths({ global });
     const fileContent = await readFileContent(
-      join(baseDir, paths.relativeDirPath, paths.relativeFilePath),
+      join(outputRoot, paths.relativeDirPath, paths.relativeFilePath),
     );
     return new CursorHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -56,10 +63,11 @@ export class CursorHooks extends ToolHooks {
   }
 
   static fromRulesyncHooks({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncHooks,
     validate = true,
-  }: ToolHooksFromRulesyncHooksParams): CursorHooks {
+    global = false,
+  }: ToolHooksFromRulesyncHooksParams & { global?: boolean }): CursorHooks {
     const config = rulesyncHooks.getJson();
     const cursorSupported: Set<string> = new Set(CURSOR_HOOK_EVENTS);
     const sharedHooks: HooksConfig["hooks"] = {};
@@ -86,6 +94,10 @@ export class CursorHooks extends ToolHooks {
         ...(def.loop_limit !== undefined && { loop_limit: def.loop_limit }),
         ...(def.matcher !== undefined && def.matcher !== null && { matcher: def.matcher }),
         ...(def.prompt !== undefined && def.prompt !== null && { prompt: def.prompt }),
+        ...(def.failClosed !== undefined &&
+          def.failClosed !== null && {
+            failClosed: def.failClosed,
+          }),
       }));
     }
     const cursorConfig = {
@@ -93,9 +105,9 @@ export class CursorHooks extends ToolHooks {
       hooks: mappedHooks,
     };
     const fileContent = JSON.stringify(cursorConfig, null, 2);
-    const paths = CursorHooks.getSettablePaths();
+    const paths = CursorHooks.getSettablePaths({ global });
     return new CursorHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -127,12 +139,12 @@ export class CursorHooks extends ToolHooks {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolHooksForDeletionParams): CursorHooks {
     return new CursorHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",

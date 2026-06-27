@@ -3,7 +3,8 @@ targets:
   - "*"
 description: >-
   Fetch latest origin/main and rebase it onto the current branch, resolving
-  conflicts if necessary
+  conflicts if necessary. Use when the user wants to rebase on main, update
+  their branch with latest main, or sync with upstream.
 ---
 
 # Rebase Latest Main

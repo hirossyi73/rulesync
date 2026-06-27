@@ -1,21 +1,4 @@
-import { join } from "node:path";
-
 import { z } from "zod/mini";
-
-import { ValidationResult } from "../../types/ai-file.js";
-import { formatError } from "../../utils/error.js";
-import { readFileContent, toKebabCaseFilename } from "../../utils/file.js";
-import { parseFrontmatter, stringifyFrontmatter } from "../../utils/frontmatter.js";
-import { RulesyncRule } from "./rulesync-rule.js";
-import {
-  ToolRule,
-  ToolRuleForDeletionParams,
-  ToolRuleFromFileParams,
-  ToolRuleFromRulesyncRuleParams,
-  ToolRuleParams,
-  ToolRuleSettablePaths,
-  buildToolPath,
-} from "./tool-rule.js";
 
 export const AntigravityRuleFrontmatterSchema = z.looseObject({
   trigger: z.optional(
@@ -33,39 +16,6 @@ export const AntigravityRuleFrontmatterSchema = z.looseObject({
 
 export type AntigravityRuleFrontmatter = z.infer<typeof AntigravityRuleFrontmatterSchema>;
 
-/**
- * Parameters for creating an AntigravityRule instance.
- * Requires frontmatter and body separately instead of combined fileContent.
- */
-export type AntigravityRuleParams = Omit<ToolRuleParams, "fileContent"> & {
-  frontmatter: AntigravityRuleFrontmatter;
-  body: string;
-};
-
-export type AntigravityRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & {
-  nonRoot: {
-    relativeDirPath: string;
-  };
-};
-
-/**
- * Rule generator for Google Antigravity IDE
- *
- * Generates rule files for Antigravity's .agent/rules/ directory.
- * All rules (both root and non-root from RulesyncRule) are placed in .agent/rules.
- *
- * Filename requirements:
- * - Filenames must be lowercase, numbers, and hyphens only
- * - Automatically converts filenames to kebab-case during generation
- *   (e.g., "CodingGuidelines.md" → "coding-guidelines.md")
- *
- * Supports frontmatter configuration with different trigger types:
- * - always_on: Rule always applies (default)
- * - glob: Rule applies to files matching glob patterns
- * - manual: Rule must be manually activated
- * - model_decision: Model decides when to apply based on description
- */
-
 // --- Helper Functions for Globs Conversion ---
 
 /**
@@ -73,7 +23,7 @@ export type AntigravityRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> &
  * @param globs - Comma-separated globs string (e.g., "*.ts,*.js") or array of globs
  * @returns Array of glob patterns
  */
-function parseGlobsString(globs: string | string[] | undefined): string[] {
+export function parseGlobsString(globs: string | string[] | undefined): string[] {
   if (!globs) {
     return [];
   }
@@ -104,7 +54,7 @@ function stringifyGlobs(globs: string[] | undefined): string | undefined {
  * @param stored - StoredAntigravity that may have globs as array
  * @returns Normalized AntigravityRuleFrontmatter with globs as string
  */
-function normalizeStoredAntigravity(
+export function normalizeStoredAntigravity(
   stored: StoredAntigravity,
 ): AntigravityRuleFrontmatter | undefined {
   if (!stored) {
@@ -124,7 +74,7 @@ function normalizeStoredAntigravity(
  * May be undefined if no Antigravity-specific config was previously stored.
  * Note: globs may be stored as array in RulesyncRule but should be string in AntigravityRule.
  */
-type StoredAntigravity =
+export type StoredAntigravity =
   | (Omit<AntigravityRuleFrontmatter, "globs"> & { globs?: string | string[] })
   | undefined;
 
@@ -275,7 +225,7 @@ const inferenceStrategy: TriggerStrategy = {
  *
  * DO NOT reorder without understanding the matching logic.
  */
-const STRATEGIES: TriggerStrategy[] = [
+export const STRATEGIES: TriggerStrategy[] = [
   globStrategy,
   manualStrategy,
   alwaysOnStrategy,
@@ -283,230 +233,3 @@ const STRATEGIES: TriggerStrategy[] = [
   unknownStrategy,
   inferenceStrategy,
 ];
-
-// ---------------------------------------------
-
-export class AntigravityRule extends ToolRule {
-  private readonly frontmatter: AntigravityRuleFrontmatter;
-  private readonly body: string;
-
-  /**
-   * Creates an AntigravityRule instance.
-   *
-   * @param params - Rule parameters including frontmatter and body
-   * @param params.frontmatter - Antigravity-specific frontmatter configuration
-   * @param params.body - The markdown body content (without frontmatter)
-   *
-   * Note: Files without frontmatter will default to always_on trigger during fromFile().
-   */
-  constructor({ frontmatter, body, ...rest }: AntigravityRuleParams) {
-    if (rest.validate !== false) {
-      const result = AntigravityRuleFrontmatterSchema.safeParse(frontmatter);
-      if (!result.success) {
-        throw new Error(
-          `Invalid frontmatter in ${join(rest.relativeDirPath, rest.relativeFilePath)}: ${formatError(result.error)}`,
-        );
-      }
-    }
-
-    super({
-      ...rest,
-      // Ensure fileContent includes frontmatter when constructed directly
-      fileContent: stringifyFrontmatter(body, frontmatter),
-    });
-    this.frontmatter = frontmatter;
-    this.body = body;
-  }
-
-  static getSettablePaths(
-    _options: {
-      global?: boolean;
-      excludeToolDir?: boolean;
-    } = {},
-  ): AntigravityRuleSettablePaths {
-    return {
-      nonRoot: {
-        relativeDirPath: buildToolPath(".agent", "rules", _options.excludeToolDir),
-      },
-    };
-  }
-
-  static async fromFile({
-    baseDir = process.cwd(),
-    relativeFilePath,
-    validate = true,
-  }: ToolRuleFromFileParams): Promise<AntigravityRule> {
-    const filePath = join(
-      baseDir,
-      this.getSettablePaths().nonRoot.relativeDirPath,
-      relativeFilePath,
-    );
-    const fileContent = await readFileContent(filePath);
-    const { frontmatter, body } = parseFrontmatter(fileContent, filePath);
-
-    let parsedFrontmatter: AntigravityRuleFrontmatter;
-    if (validate) {
-      const result = AntigravityRuleFrontmatterSchema.safeParse(frontmatter);
-      if (result.success) {
-        parsedFrontmatter = result.data;
-      } else {
-        throw new Error(`Invalid frontmatter in ${filePath}: ${formatError(result.error)}`);
-      }
-    } else {
-      // eslint-disable-next-line no-type-assertion/no-type-assertion
-      parsedFrontmatter = frontmatter as AntigravityRuleFrontmatter;
-    }
-
-    return new AntigravityRule({
-      baseDir,
-      relativeDirPath: this.getSettablePaths().nonRoot.relativeDirPath,
-      relativeFilePath: relativeFilePath,
-      body,
-      frontmatter: parsedFrontmatter,
-      validate,
-      root: false,
-    });
-  }
-
-  /**
-   * Converts a RulesyncRule to an AntigravityRule.
-   *
-   * Trigger inference:
-   * - If antigravity.trigger is set, it's preserved
-   * - If specific globs are set, infers "glob" trigger
-   * - Otherwise, infers "always_on" trigger
-   */
-  static fromRulesyncRule({
-    baseDir = process.cwd(),
-    rulesyncRule,
-    validate = true,
-  }: ToolRuleFromRulesyncRuleParams): AntigravityRule {
-    const rulesyncFrontmatter = rulesyncRule.getFrontmatter();
-
-    // Normalize once before dispatching to strategy
-    const storedAntigravity = rulesyncFrontmatter.antigravity;
-    const normalized = normalizeStoredAntigravity(storedAntigravity);
-    const storedTrigger = storedAntigravity?.trigger;
-
-    const strategy = STRATEGIES.find((s) => s.canHandle(storedTrigger));
-
-    if (!strategy) {
-      // Should not happen with current strategies, but fallback safely
-      throw new Error(`No strategy found for trigger: ${storedTrigger}`);
-    }
-
-    const frontmatter = strategy.generateFrontmatter(normalized, rulesyncFrontmatter);
-
-    // Both root and non-root rules are placed in .agent/rules directory
-    const paths = this.getSettablePaths();
-
-    const kebabCaseFilename = toKebabCaseFilename(rulesyncRule.getRelativeFilePath());
-
-    return new AntigravityRule({
-      baseDir,
-      relativeDirPath: paths.nonRoot.relativeDirPath,
-      relativeFilePath: kebabCaseFilename,
-      frontmatter,
-      body: rulesyncRule.getBody(),
-      validate,
-      root: false,
-    });
-  }
-
-  /**
-   * Converts this AntigravityRule to a RulesyncRule.
-   *
-   * The Antigravity configuration is preserved in the RulesyncRule's
-   * frontmatter.antigravity field for round-trip compatibility.
-   *
-   * Note: All Antigravity rules are treated as non-root (root: false),
-   * as they are all placed in the .agent/rules directory.
-   *
-   * @returns RulesyncRule instance with Antigravity config preserved
-   */
-  toRulesyncRule(): RulesyncRule {
-    // Determine appropriate strategy based on current trigger
-    const strategy = STRATEGIES.find((s) => s.canHandle(this.frontmatter.trigger));
-
-    // If no strategy found (e.g. unknown trigger and Inference handles undefined), use Unknown behavior?
-    // Strategies with canHandle(trigger) usually cover all valid cases.
-    // If trigger is custom string, UnknownStrategy handles it.
-    // If trigger is undefined, InferenceStrategy handles it.
-    // So we should find one. If not, fallback to empty array?
-    let rulesyncData: {
-      globs: string[];
-      description?: string;
-      antigravity: Record<string, unknown>;
-    } = {
-      globs: [],
-      antigravity: this.frontmatter,
-    };
-
-    if (strategy) {
-      rulesyncData = strategy.exportRulesyncData(this.frontmatter);
-    }
-
-    // Convert antigravity.globs from string to array for RulesyncRule schema
-    const antigravityForRulesync = {
-      ...rulesyncData.antigravity,
-      globs: this.frontmatter.globs ? parseGlobsString(this.frontmatter.globs) : undefined,
-    };
-
-    return new RulesyncRule({
-      baseDir: process.cwd(),
-      relativeDirPath: RulesyncRule.getSettablePaths().recommended.relativeDirPath,
-      relativeFilePath: this.getRelativeFilePath(),
-      frontmatter: {
-        root: false,
-        targets: ["*"],
-        ...rulesyncData,
-        antigravity: antigravityForRulesync,
-      },
-      // When converting back, we only want the body content
-      body: this.body,
-    });
-  }
-
-  getBody(): string {
-    return this.body;
-  }
-
-  // Helper to access raw file content including frontmatter is `this.fileContent` (from ToolFile)
-  // But we might want `body` only for some operations?
-  // ToolFile.getFileContent() returns the whole string.
-
-  getFrontmatter(): AntigravityRuleFrontmatter {
-    return this.frontmatter;
-  }
-
-  validate(): ValidationResult {
-    const result = AntigravityRuleFrontmatterSchema.safeParse(this.frontmatter);
-    if (!result.success) {
-      return { success: false, error: new Error(formatError(result.error)) };
-    }
-    return { success: true, error: null };
-  }
-
-  static forDeletion({
-    baseDir = process.cwd(),
-    relativeDirPath,
-    relativeFilePath,
-  }: ToolRuleForDeletionParams): AntigravityRule {
-    return new AntigravityRule({
-      baseDir,
-      relativeDirPath,
-      relativeFilePath,
-      frontmatter: {},
-      body: "",
-      validate: false,
-      root: false,
-    });
-  }
-
-  static isTargetedByRulesyncRule(rulesyncRule: RulesyncRule): boolean {
-    return this.isTargetedByRulesyncRuleDefault({
-      rulesyncRule,
-      toolTarget: "antigravity",
-    });
-  }
-}

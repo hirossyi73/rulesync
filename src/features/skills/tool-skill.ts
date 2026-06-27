@@ -7,25 +7,33 @@ import { parseFrontmatter } from "../../utils/frontmatter.js";
 import { RulesyncSkill, SkillFile } from "./rulesync-skill.js";
 
 export type ToolSkillFromRulesyncSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   rulesyncSkill: RulesyncSkill;
   validate?: boolean;
   global?: boolean;
 };
 
 export type ToolSkillSettablePaths = {
+  /** Primary output and first import root (highest precedence when the same skill name exists in multiple roots). */
   relativeDirPath: string;
+  /** Extra directories to scan for import and deletion (e.g. Rovo Dev `.agents/skills/` alongside `.rovodev/skills/`). */
+  alternativeSkillRoots?: string[];
 };
 
+/** Ordered skill directory roots: primary first. */
+export function toolSkillSearchRoots(paths: ToolSkillSettablePaths): string[] {
+  return [paths.relativeDirPath, ...(paths.alternativeSkillRoots ?? [])];
+}
+
 export type ToolSkillFromDirParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   global?: boolean;
 };
 
 export type ToolSkillForDeletionParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath: string;
   dirName: string;
   global?: boolean;
@@ -36,7 +44,7 @@ export type ToolSkillForDeletionParams = {
  * Used by loadSkillDirContent to return parsed file data.
  */
 export type LoadedSkillDirContent = {
-  baseDir: string;
+  outputRoot: string;
   relativeDirPath: string;
   dirName: string;
   frontmatter: Record<string, unknown>;
@@ -156,7 +164,7 @@ export abstract class ToolSkill extends AiDir {
    * @returns Parsed skill directory content
    */
   protected static async loadSkillDirContent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
@@ -166,7 +174,7 @@ export abstract class ToolSkill extends AiDir {
   }): Promise<LoadedSkillDirContent> {
     const settablePaths = getSettablePaths({ global });
     const actualRelativeDirPath = relativeDirPath ?? settablePaths.relativeDirPath;
-    const skillDirPath = join(baseDir, actualRelativeDirPath, dirName);
+    const skillDirPath = join(outputRoot, actualRelativeDirPath, dirName);
     const skillFilePath = join(skillDirPath, SKILL_FILE_NAME);
 
     if (!(await fileExists(skillFilePath))) {
@@ -177,14 +185,14 @@ export abstract class ToolSkill extends AiDir {
     const { frontmatter, body: content } = parseFrontmatter(fileContent, skillFilePath);
 
     const otherFiles = await this.collectOtherFiles(
-      baseDir,
+      outputRoot,
       actualRelativeDirPath,
       dirName,
       SKILL_FILE_NAME,
     );
 
     return {
-      baseDir,
+      outputRoot,
       relativeDirPath: actualRelativeDirPath,
       dirName,
       frontmatter,

@@ -3,19 +3,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RULESYNC_RULES_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, readFileContent, writeFileContent } from "../../utils/file.js";
-import { logger } from "../../utils/logger.js";
 import { AgentsMdRule } from "./agentsmd-rule.js";
 import { AugmentcodeLegacyRule } from "./augmentcode-legacy-rule.js";
 import { ClaudecodeLegacyRule } from "./claudecode-legacy-rule.js";
 import { ClaudecodeRule } from "./claudecode-rule.js";
 import { CopilotRule } from "./copilot-rule.js";
+import { CopilotcliRule } from "./copilotcli-rule.js";
 import { CursorRule } from "./cursor-rule.js";
 import { OpenCodeRule } from "./opencode-rule.js";
+import { RovodevRule } from "./rovodev-rule.js";
 import { RulesProcessor, type RulesProcessorToolTarget } from "./rules-processor.js";
 import { RulesyncRule } from "./rulesync-rule.js";
 import { WarpRule } from "./warp-rule.js";
+
+const logger = createMockLogger();
 
 describe("RulesProcessor", () => {
   let testDir: string;
@@ -28,18 +32,17 @@ describe("RulesProcessor", () => {
 
   afterEach(async () => {
     await cleanup();
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 
   describe("convertRulesyncFilesToToolFiles", () => {
     it("should filter out rules not targeted for the specific tool", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "copilot",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "copilot" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "copilot-rule.md",
           frontmatter: {
@@ -48,7 +51,7 @@ describe("RulesProcessor", () => {
           body: "Copilot specific rule",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "cursor-rule.md",
           frontmatter: {
@@ -57,7 +60,7 @@ describe("RulesProcessor", () => {
           body: "Cursor specific rule",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "all-tools-rule.md",
           frontmatter: {
@@ -76,13 +79,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should return empty array when no rules match the tool target", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "warp",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "warp" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "copilot-rule.md",
           frontmatter: {
@@ -91,7 +92,7 @@ describe("RulesProcessor", () => {
           body: "Copilot specific rule",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "cursor-rule.md",
           frontmatter: {
@@ -107,13 +108,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should handle mixed targets correctly", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "mixed-rule.md",
           frontmatter: {
@@ -122,7 +121,7 @@ describe("RulesProcessor", () => {
           body: "Mixed targets rule",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "other-rule.md",
           frontmatter: {
@@ -139,13 +138,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should handle undefined targets in frontmatter", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "augmentcode-legacy",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "augmentcode-legacy" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "no-targets.md",
           frontmatter: {},
@@ -161,13 +158,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should handle empty targets array", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "warp",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "warp" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "empty-targets.md",
           frontmatter: {
@@ -185,15 +180,14 @@ describe("RulesProcessor", () => {
 
     it("should throw error for unsupported tool target", () => {
       expect(() => {
-        new RulesProcessor({
-          toolTarget: "unsupported-tool" as any,
-        });
+        new RulesProcessor({ logger, toolTarget: "unsupported-tool" as any });
       }).toThrow();
     });
 
     it("should correctly validate and filter rules for each supported tool", async () => {
       const testCases = [
         { toolTarget: "copilot" as const, ruleClass: CopilotRule },
+        { toolTarget: "copilotcli" as const, ruleClass: CopilotcliRule },
         { toolTarget: "cursor" as const, ruleClass: CursorRule },
         { toolTarget: "claudecode" as const, ruleClass: ClaudecodeRule },
         { toolTarget: "warp" as const, ruleClass: WarpRule },
@@ -204,13 +198,11 @@ describe("RulesProcessor", () => {
       ];
 
       for (const { toolTarget, ruleClass } of testCases) {
-        const processor = new RulesProcessor({
-          toolTarget: toolTarget,
-        });
+        const processor = new RulesProcessor({ logger, toolTarget: toolTarget });
 
         const rulesyncRules = [
           new RulesyncRule({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
             relativeFilePath: "targeted-rule.md",
             frontmatter: {
@@ -219,11 +211,11 @@ describe("RulesProcessor", () => {
             body: `${toolTarget} specific rule`,
           }),
           new RulesyncRule({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
             relativeFilePath: "non-targeted-rule.md",
             frontmatter: {
-              targets: ["windsurf"],
+              targets: ["devin"],
             },
             body: "Other tool rule",
           }),
@@ -239,13 +231,11 @@ describe("RulesProcessor", () => {
 
   describe("generateReferencesSection", () => {
     it("should generate references section with description and globs for claudecode-legacy", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode-legacy",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode-legacy" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root-rule.md",
           frontmatter: {
@@ -257,7 +247,7 @@ describe("RulesProcessor", () => {
           body: "# Root rule content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "feature-rule.md",
           frontmatter: {
@@ -269,7 +259,7 @@ describe("RulesProcessor", () => {
           body: "# Feature rule content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "minimal-rule.md",
           frontmatter: {
@@ -299,13 +289,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should handle rules with undefined description and globs", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode-legacy",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode-legacy" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -315,7 +303,7 @@ describe("RulesProcessor", () => {
           body: "# Root",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "no-metadata.md",
           frontmatter: {
@@ -336,13 +324,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should escape double quotes in description", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode-legacy",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode-legacy" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -352,7 +338,7 @@ describe("RulesProcessor", () => {
           body: "# Root",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "quoted.md",
           frontmatter: {
@@ -375,13 +361,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should not generate references section when only root rule exists for claudecode-legacy", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode-legacy",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode-legacy" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -403,13 +387,11 @@ describe("RulesProcessor", () => {
     });
 
     it("should not generate references section for claudecode (modular rules)", async () => {
-      const processor = new RulesProcessor({
-        toolTarget: "claudecode",
-      });
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -421,7 +403,7 @@ describe("RulesProcessor", () => {
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "feature.md",
           frontmatter: {
@@ -444,14 +426,80 @@ describe("RulesProcessor", () => {
       expect(content).not.toContain("@.claude/");
     });
 
-    it("should handle multiple globs correctly for claudecode-legacy", async () => {
+    it("should generate TOON references section for claudecode when ruleDiscoveryMode is overridden to explicit", async () => {
       const processor = new RulesProcessor({
-        toolTarget: "claudecode-legacy",
+        logger,
+        toolTarget: "claudecode",
+        featureOptions: { ruleDiscoveryMode: "explicit" },
       });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: {
+            root: true,
+            targets: ["*"],
+          },
+          body: "# Root content",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "feature.md",
+          frontmatter: {
+            root: false,
+            targets: ["*"],
+            description: "Feature rule",
+            globs: ["src/**/*.ts"],
+          },
+          body: "# Feature content",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+      const rootRule = result.find((rule) => rule instanceof ClaudecodeRule && rule.isRoot());
+      const content = rootRule?.getFileContent();
+
+      expect(content).toContain("Please also reference the following rules as needed.");
+      expect(content).toContain("rules[1]:");
+      expect(content).toContain("- path: @.claude/rules/feature.md");
+      expect(content).toContain("applyTo[1]: src/**/*.ts");
+      expect(content).toContain("# Root content");
+    });
+
+    it("should throw for invalid rules feature options", async () => {
+      const processor = new RulesProcessor({
+        logger,
+        toolTarget: "claudecode",
+        featureOptions: { ruleDiscoveryMode: "invalid" },
+      });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: {
+            root: true,
+            targets: ["*"],
+          },
+          body: "# Root content",
+        }),
+      ];
+
+      await expect(processor.convertRulesyncFilesToToolFiles(rulesyncRules)).rejects.toThrow(
+        '`ruleDiscoveryMode` must be either "none" or "explicit"',
+      );
+    });
+
+    it("should handle multiple globs correctly for claudecode-legacy", async () => {
+      const processor = new RulesProcessor({ logger, toolTarget: "claudecode-legacy" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -461,7 +509,7 @@ describe("RulesProcessor", () => {
           body: "# Root",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "multi-glob.md",
           frontmatter: {
@@ -498,11 +546,13 @@ describe("RulesProcessor", () => {
       );
 
       const cursorProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "cursor",
       });
       const claudecodeProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -521,7 +571,8 @@ describe("RulesProcessor", () => {
       await writeFileContent(join(testDir, ".claude", "CLAUDE.md"), "# Project from .claude dir");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -539,7 +590,8 @@ describe("RulesProcessor", () => {
       await writeFileContent(join(testDir, ".claude", "CLAUDE.md"), "# .claude/CLAUDE.md");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -555,7 +607,8 @@ describe("RulesProcessor", () => {
       await writeFileContent(join(testDir, ".claude", "CLAUDE.md"), "# Legacy from .claude dir");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode-legacy",
       });
 
@@ -568,7 +621,8 @@ describe("RulesProcessor", () => {
 
     it("should return empty when neither ./CLAUDE.md nor .claude/CLAUDE.md exist", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -576,6 +630,26 @@ describe("RulesProcessor", () => {
       const rootFiles = files.filter((f) => f.getRelativeFilePath() === "CLAUDE.md");
 
       expect(rootFiles.length).toBe(0);
+    });
+
+    it("should load Rovodev modular rules but skip reserved memory names with warning", async () => {
+      const modularDir = join(testDir, ".rovodev", ".rulesync", "modular-rules");
+      await ensureDir(modularDir);
+      await writeFileContent(join(modularDir, "ok.md"), "# OK");
+      await writeFileContent(join(modularDir, "AGENTS.md"), "# misplaced");
+      await writeFileContent(join(modularDir, "AGENTS.local.md"), "# misplaced local");
+
+      const warnSpy = vi.spyOn(logger, "warn");
+
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "rovodev" });
+      const files = await processor.loadToolFiles();
+      const nonRoot = files.filter(
+        (f): f is RovodevRule => f instanceof RovodevRule && !f.isRoot(),
+      );
+
+      expect(nonRoot.map((f) => f.getRelativeFilePath())).toEqual(["ok.md"]);
+      expect(warnSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      warnSpy.mockRestore();
     });
   });
 
@@ -587,10 +661,7 @@ describe("RulesProcessor", () => {
         "# Frontend Rule",
       );
 
-      const processor = new RulesProcessor({
-        baseDir: testDir,
-        toolTarget: "cursor",
-      });
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "cursor" });
 
       const filesToDelete = await processor.loadToolFiles({
         forDeletion: true,
@@ -610,7 +681,8 @@ describe("RulesProcessor", () => {
       await writeFileContent(join(testDir, ".claude", "memories", "memory2.md"), "# Memory 2");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode-legacy",
       });
 
@@ -636,21 +708,18 @@ describe("RulesProcessor", () => {
         "copilot",
         "cursor",
         "codexcli",
-        "geminicli",
         "junie",
         "kiro",
         "opencode",
         "qwencode",
         "roo",
+        "takt",
         "warp",
-        "windsurf",
+        "devin",
       ];
 
       for (const target of targets) {
-        const processor = new RulesProcessor({
-          baseDir: testDir,
-          toolTarget: target,
-        });
+        const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: target });
 
         const filesToDelete = await processor.loadToolFiles({
           forDeletion: true,
@@ -663,7 +732,8 @@ describe("RulesProcessor", () => {
 
     it("should handle errors gracefully", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -688,7 +758,8 @@ Content that would fail parsing`;
       await writeFileContent(join(testDir, "CLAUDE.md"), brokenFrontmatter);
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode-legacy",
       });
 
@@ -707,7 +778,8 @@ Content that would fail parsing`;
       await writeFileContent(join(testDir, "CLAUDE.local.md"), "# Local");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -725,7 +797,8 @@ Content that would fail parsing`;
       await writeFileContent(join(testDir, "CLAUDE.local.md"), "# Local");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode-legacy",
       });
 
@@ -738,13 +811,93 @@ Content that would fail parsing`;
       expect(filePaths).toContain("CLAUDE.local.md");
     });
 
+    it("should NOT include CLAUDE.local.md for deletion for claudecode in global mode", async () => {
+      // Local-root files (CLAUDE.local.md) are a project-scope concept; rulesync
+      // never generates them in global mode, so the clean path must skip them in
+      // global scope rather than searching for and deleting a user's hand-placed
+      // global file.
+      await writeFileContent(join(testDir, "CLAUDE.local.md"), "# Local");
+
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "claudecode",
+        global: true,
+      });
+
+      const filesToDelete = await processor.loadToolFiles({
+        forDeletion: true,
+      });
+
+      const filePaths = filesToDelete.map((f) => f.getRelativeFilePath());
+      expect(filePaths).not.toContain("CLAUDE.local.md");
+    });
+
+    it("should not double-import the kiro global root steering file (product.md)", async () => {
+      // In global scope the kiro root (product.md) lives in the same dir as the
+      // non-root steering files, so the non-root glob would otherwise re-import it.
+      const steeringDir = join(testDir, ".kiro", "steering");
+      await ensureDir(steeringDir);
+      await writeFileContent(join(steeringDir, "product.md"), "Root overview");
+      await writeFileContent(
+        join(steeringDir, "tech.md"),
+        "---\ninclusion: fileMatch\nfileMatchPattern: '**/*.ts'\n---\nTS steering",
+      );
+
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "kiro",
+        global: true,
+      });
+
+      const files = await processor.loadToolFiles();
+      const filePaths = files.map((f) => f.getRelativeFilePath());
+
+      expect(filePaths.filter((p) => p === "product.md")).toHaveLength(1);
+      expect(filePaths).toContain("tech.md");
+      expect(filePaths).toHaveLength(2);
+    });
+
+    it("should include AGENTS.local.md for deletion for rovodev", async () => {
+      await ensureDir(join(testDir, ".rovodev"));
+      await writeFileContent(join(testDir, ".rovodev", "AGENTS.md"), "# Root");
+      await writeFileContent(join(testDir, "AGENTS.local.md"), "# Local");
+
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "rovodev" });
+
+      const filesToDelete = await processor.loadToolFiles({
+        forDeletion: true,
+      });
+
+      const filePaths = filesToDelete.map((f) => f.getRelativeFilePath());
+      expect(filePaths).toContain("AGENTS.local.md");
+    });
+
+    it("should include project-root AGENTS.md for deletion when .rovodev/AGENTS.md exists (mirror)", async () => {
+      await ensureDir(join(testDir, ".rovodev"));
+      await writeFileContent(join(testDir, ".rovodev", "AGENTS.md"), "# Primary");
+      await writeFileContent(join(testDir, "AGENTS.md"), "# Mirror");
+
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "rovodev" });
+
+      const filesToDelete = await processor.loadToolFiles({
+        forDeletion: true,
+      });
+
+      const rootAgents = filesToDelete.filter((f) => f.getRelativeFilePath() === "AGENTS.md");
+      expect(rootAgents.length).toBeGreaterThanOrEqual(1);
+      expect(rootAgents.some((f) => f.getRelativeDirPath() === ".")).toBe(true);
+    });
+
     it("should include .claude/CLAUDE.local.md for deletion when only in .claude/ directory", async () => {
       await ensureDir(join(testDir, ".claude"));
       await writeFileContent(join(testDir, ".claude", "CLAUDE.md"), "# Root from .claude");
       await writeFileContent(join(testDir, ".claude", "CLAUDE.local.md"), "# Local from .claude");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -766,7 +919,8 @@ Content that would fail parsing`;
       await writeFileContent(join(testDir, ".claude", "CLAUDE.md"), "# Alternative Root");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -779,19 +933,38 @@ Content that would fail parsing`;
   });
 
   describe("getToolTargets with global: true", () => {
-    it("should return claudecode, claudecode-legacy, codexcli, geminicli, kilo, copilot and opencode as global targets", () => {
+    it("should return global-capable rule targets in map order", () => {
       const globalTargets = RulesProcessor.getToolTargets({ global: true });
 
       expect(globalTargets).toEqual([
+        "amp",
+        "antigravity-cli",
+        "antigravity-ide",
+        "augmentcode",
         "claudecode",
         "claudecode-legacy",
+        "cline",
         "codexcli",
         "copilot",
+        "copilotcli",
+        "deepagents",
         "factorydroid",
-        "geminicli",
         "goose",
+        "grokcli",
+        "junie",
         "kilo",
+        "kiro",
+        "kiro-cli",
+        "kiro-ide",
         "opencode",
+        "pi",
+        "qwencode",
+        "roo",
+        "rovodev",
+        "takt",
+        "vibe",
+        "devin",
+        "zed",
       ]);
     });
 
@@ -812,19 +985,38 @@ Content that would fail parsing`;
       const globalTargets = RulesProcessor.getToolTargets({ global: true });
 
       // These are the targets that support global mode
+      expect(globalTargets).toContain("amp");
+      expect(globalTargets).toContain("antigravity-cli");
+      expect(globalTargets).toContain("antigravity-ide");
+      expect(globalTargets).toContain("augmentcode");
       expect(globalTargets).toContain("claudecode");
       expect(globalTargets).toContain("claudecode-legacy");
+      expect(globalTargets).toContain("cline");
       expect(globalTargets).toContain("codexcli");
       expect(globalTargets).toContain("copilot");
+      expect(globalTargets).toContain("copilotcli");
+      expect(globalTargets).toContain("deepagents");
       expect(globalTargets).toContain("factorydroid");
-      expect(globalTargets).toContain("geminicli");
+      expect(globalTargets).toContain("junie");
       expect(globalTargets).toContain("kilo");
       expect(globalTargets).toContain("goose");
+      expect(globalTargets).toContain("grokcli");
       expect(globalTargets).toContain("opencode");
-      expect(globalTargets.length).toBe(9);
+      expect(globalTargets).toContain("pi");
+      expect(globalTargets).toContain("roo");
+      expect(globalTargets).toContain("rovodev");
+      expect(globalTargets).toContain("takt");
+      expect(globalTargets).toContain("vibe");
+      expect(globalTargets).toContain("devin");
+      expect(globalTargets).toContain("zed");
+      expect(globalTargets).toContain("kiro");
+      expect(globalTargets).toContain("kiro-cli");
+      expect(globalTargets).toContain("kiro-ide");
+      expect(globalTargets.length).toBe(28);
 
       // These targets should NOT be in global mode
       expect(globalTargets).not.toContain("cursor");
+      expect(globalTargets).not.toContain("hermesagent");
       expect(globalTargets).not.toContain("warp");
     });
   });
@@ -833,7 +1025,8 @@ Content that would fail parsing`;
     describe("constructor", () => {
       it("should accept global parameter", () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
@@ -843,7 +1036,8 @@ Content that would fail parsing`;
 
       it("should default global to false when not specified", () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "claudecode",
         });
 
@@ -854,7 +1048,8 @@ Content that would fail parsing`;
     describe("loadRulesyncFiles in global mode", () => {
       it("should accept global parameter in constructor", () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
@@ -866,14 +1061,15 @@ Content that would fail parsing`;
     describe("convertRulesyncFilesToToolFiles in global mode", () => {
       it("should convert using global paths when global=true for claudecode", async () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
 
         const rulesyncRules = [
           new RulesyncRule({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
             relativeFilePath: "root.md",
             frontmatter: {
@@ -894,14 +1090,15 @@ Content that would fail parsing`;
 
       it("should convert using global paths when global=true for codexcli", async () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "codexcli",
           global: true,
         });
 
         const rulesyncRules = [
           new RulesyncRule({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
             relativeFilePath: "root.md",
             frontmatter: {
@@ -922,14 +1119,15 @@ Content that would fail parsing`;
 
       it("should use regular paths when global=false", async () => {
         const processor = new RulesProcessor({
-          baseDir: testDir,
+          logger,
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: false,
         });
 
         const rulesyncRules = [
           new RulesyncRule({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
             relativeFilePath: "root.md",
             frontmatter: {
@@ -980,7 +1178,8 @@ targets: ["*"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -999,7 +1198,8 @@ targets: ["*"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1028,7 +1228,8 @@ targets: ["*"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
         global: true,
       });
@@ -1041,7 +1242,7 @@ targets: ["*"]
       expect(rulesyncRule.getFrontmatter().root).toBe(true);
     });
 
-    it("should load rulesync files from cwd even when baseDir is different (global mode)", async () => {
+    it("should load rulesync files from cwd even when outputRoot is different (global mode)", async () => {
       await ensureDir(join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH));
       await writeFileContent(
         join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH, "root.md"),
@@ -1052,12 +1253,13 @@ targets: ["*"]
 # Root rule`,
       );
 
-      // Use a different baseDir to simulate global mode (baseDir = homeDir)
-      const differentBaseDir = join(testDir, "fake-home");
-      await ensureDir(differentBaseDir);
+      // Use a different outputRoot to simulate global mode (outputRoot = homeDir)
+      const differentOutputRoot = join(testDir, "fake-home");
+      await ensureDir(differentOutputRoot);
 
       const processor = new RulesProcessor({
-        baseDir: differentBaseDir,
+        logger,
+        outputRoot: differentOutputRoot,
         toolTarget: "claudecode",
         global: true,
       });
@@ -1072,13 +1274,14 @@ targets: ["*"]
   describe("localRoot content generation", () => {
     it("should generate CLAUDE.local.md for claudecode", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -1088,7 +1291,7 @@ targets: ["*"]
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "local.md",
           frontmatter: {
@@ -1119,13 +1322,14 @@ targets: ["*"]
 
     it("should generate CLAUDE.local.md for claudecode-legacy", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode-legacy",
       });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -1135,7 +1339,7 @@ targets: ["*"]
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "local.md",
           frontmatter: {
@@ -1164,15 +1368,85 @@ targets: ["*"]
       expect(localRule?.getFileContent()).toBe("# Local content");
     });
 
-    it("should append localRoot content to root file for other tools", async () => {
-      const processor = new RulesProcessor({
-        baseDir: testDir,
-        toolTarget: "copilot",
-      });
+    it("should write .rovodev/AGENTS.md and mirror ./AGENTS.md for rovodev project mode", async () => {
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "rovodev" });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: {
+            root: true,
+            targets: ["rovodev"],
+          },
+          body: "# Rovodev root",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      const primary = result.find(
+        (r) =>
+          r instanceof RovodevRule &&
+          r.getRelativeDirPath() === ".rovodev" &&
+          r.getRelativeFilePath() === "AGENTS.md",
+      );
+      const mirror = result.find(
+        (r) =>
+          r instanceof RovodevRule &&
+          r.getRelativeDirPath() === "." &&
+          r.getRelativeFilePath() === "AGENTS.md",
+      );
+
+      expect(primary).toBeDefined();
+      expect(mirror).toBeDefined();
+      expect(mirror?.getFileContent()).toBe(primary?.getFileContent());
+      expect(mirror?.getFileContent()).toContain("# Rovodev root");
+    });
+
+    it("should generate AGENTS.local.md for rovodev localRoot rule", async () => {
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "rovodev" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: {
+            root: true,
+            targets: ["rovodev"],
+          },
+          body: "# Root",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "local.md",
+          frontmatter: {
+            localRoot: true,
+            targets: ["rovodev"],
+          },
+          body: "# Local memory",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      const localRule = result.find(
+        (r) => r instanceof RovodevRule && r.getRelativeFilePath() === "AGENTS.local.md",
+      );
+      expect(localRule).toBeDefined();
+      expect(localRule?.getFileContent()).toBe("# Local memory");
+      expect(localRule?.getRelativeDirPath()).toBe(".");
+    });
+
+    it("should append localRoot content to root file for other tools", async () => {
+      const processor = new RulesProcessor({ logger, outputRoot: testDir, toolTarget: "copilot" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -1182,7 +1456,7 @@ targets: ["*"]
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "local.md",
           frontmatter: {
@@ -1204,16 +1478,17 @@ targets: ["*"]
       expect(rootRule?.getFileContent()).toContain("\n\n# Local content");
     });
 
-    it("should not generate localRoot rule in global mode", async () => {
+    it("should skip localRoot content when includeLocalRoot is false", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
-        toolTarget: "claudecode",
-        global: true,
+        logger,
+        outputRoot: testDir,
+        toolTarget: "copilot",
+        featureOptions: { includeLocalRoot: false },
       });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -1223,7 +1498,137 @@ targets: ["*"]
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "local.md",
+          frontmatter: {
+            localRoot: true,
+            targets: ["*"],
+          },
+          body: "# Local content",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      expect(result).toHaveLength(1);
+      const rootRule = result.find((r) => r instanceof CopilotRule && r.isRoot());
+      expect(rootRule?.getFileContent()).toContain("# Root content");
+      expect(rootRule?.getFileContent()).not.toContain("# Local content");
+    });
+
+    it("should include localRoot content when includeLocalRoot is explicitly true", async () => {
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "copilot",
+        featureOptions: { includeLocalRoot: true },
+      });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "# Root content",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "local.md",
+          frontmatter: { localRoot: true, targets: ["*"] },
+          body: "# Local content",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+      const rootRule = result.find((r) => r instanceof CopilotRule && r.isRoot());
+      expect(rootRule?.getFileContent()).toContain("# Root content");
+      expect(rootRule?.getFileContent()).toContain("# Local content");
+    });
+
+    it("should throw when includeLocalRoot is not a boolean", async () => {
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "copilot",
+        featureOptions: { includeLocalRoot: "false" as unknown as boolean },
+      });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "# Root",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "local.md",
+          frontmatter: { localRoot: true, targets: ["*"] },
+          body: "# Local",
+        }),
+      ];
+
+      await expect(processor.convertRulesyncFilesToToolFiles(rulesyncRules)).rejects.toThrow(
+        /includeLocalRoot.*must be a boolean/,
+      );
+    });
+
+    it("should coexist with ruleDiscoveryMode option", async () => {
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "claudecode",
+        featureOptions: { includeLocalRoot: false, ruleDiscoveryMode: "explicit" },
+      });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "# Root content",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "local.md",
+          frontmatter: { localRoot: true, targets: ["*"] },
+          body: "# Local content",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+      const localRule = result.find((r) => r.getRelativeFilePath() === "CLAUDE.local.md");
+      expect(localRule).toBeUndefined();
+    });
+
+    it("should not generate localRoot rule in global mode", async () => {
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        toolTarget: "claudecode",
+        global: true,
+      });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "root.md",
+          frontmatter: {
+            root: true,
+            targets: ["*"],
+          },
+          body: "# Root content",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "local.md",
           frontmatter: {
@@ -1244,13 +1649,14 @@ targets: ["*"]
 
     it("should filter out localRoot when target does not match", async () => {
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
       const rulesyncRules = [
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "root.md",
           frontmatter: {
@@ -1260,7 +1666,7 @@ targets: ["*"]
           body: "# Root content",
         }),
         new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
           relativeFilePath: "local.md",
           frontmatter: {
@@ -1294,7 +1700,8 @@ targets: ["agentsmd", "opencode"]
 
       // Process agentsmd first
       const agentsMdProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "agentsmd",
       });
       const agentsMdRulesyncFiles = await agentsMdProcessor.loadRulesyncFiles();
@@ -1309,7 +1716,8 @@ targets: ["agentsmd", "opencode"]
 
       // Process opencode second (should overwrite)
       const openCodeProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "opencode",
       });
       const openCodeRulesyncFiles = await openCodeProcessor.loadRulesyncFiles();
@@ -1340,7 +1748,8 @@ targets: ["opencode", "agentsmd"]
 
       // Process opencode first
       const openCodeProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "opencode",
       });
       const openCodeRulesyncFiles = await openCodeProcessor.loadRulesyncFiles();
@@ -1350,7 +1759,8 @@ targets: ["opencode", "agentsmd"]
 
       // Process agentsmd second (should overwrite)
       const agentsMdProcessor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "agentsmd",
       });
       const agentsMdRulesyncFiles = await agentsMdProcessor.loadRulesyncFiles();
@@ -1378,7 +1788,8 @@ targets: ["*"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1402,7 +1813,8 @@ targets: ["*"]
       const warnSpy = vi.spyOn(logger, "warn");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1427,7 +1839,8 @@ targets: ["*"]
       const warnSpy = vi.spyOn(logger, "warn");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1445,7 +1858,8 @@ targets: ["*"]
       const warnSpy = vi.spyOn(logger, "warn");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1478,7 +1892,8 @@ targets: ["opencode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1508,7 +1923,8 @@ targets: ["claudecode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1537,7 +1953,8 @@ targets: ["claudecode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1567,7 +1984,8 @@ targets: ["opencode"]
 
       // From claudecode's perspective, only the wildcard root matches
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1597,7 +2015,8 @@ targets: ["opencode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
         global: true,
       });
@@ -1628,7 +2047,8 @@ targets: ["claudecode"]
       const warnSpy = vi.spyOn(logger, "warn");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1668,7 +2088,8 @@ targets: ["opencode"]
 
       // claudecode sees only one localRoot targeting it — no error
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1695,7 +2116,8 @@ targets: ["copilot"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "copilot",
         global: true,
       });
@@ -1708,7 +2130,7 @@ targets: ["copilot"]
       expect(nonRootRule).toBeDefined();
     });
 
-    it("should exclude non-root rules in global mode for claudecode (no global nonRoot support)", async () => {
+    it("should include non-root rules in global mode for claudecode (global nonRoot support)", async () => {
       await ensureDir(join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH));
       await writeFileContent(
         join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH, "root.md"),
@@ -1729,15 +2151,19 @@ targets: ["claudecode"]
       const warnSpy = vi.spyOn(logger, "warn");
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
         global: true,
       });
 
+      // Claude Code reads user-level rules from ~/.claude/rules/*.md, so global
+      // non-root rules are kept rather than dropped.
       const result = await processor.loadRulesyncFiles();
-      expect(result).toHaveLength(1);
-      expect((result[0] as RulesyncRule).getFrontmatter().root).toBe(true);
-      expect(warnSpy).toHaveBeenCalledWith(
+      expect(result).toHaveLength(2);
+      expect(result.some((r) => (r as RulesyncRule).getFrontmatter().root)).toBe(true);
+      expect(result.some((r) => !(r as RulesyncRule).getFrontmatter().root)).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("non-root rulesync rules found, but it's in global mode"),
       );
     });
@@ -1768,7 +2194,8 @@ targets: ["claudecode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "copilot",
         global: true,
       });
@@ -1803,7 +2230,8 @@ targets: ["copilot"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "copilot",
         global: true,
       });
@@ -1850,13 +2278,205 @@ targets: ["claudecode"]
       );
 
       const processor = new RulesProcessor({
-        baseDir: testDir,
+        logger,
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
       await expect(processor.loadRulesyncFiles()).rejects.toThrow(
         "localRoot: true requires a root: true rule to exist for target 'claudecode'",
       );
+    });
+  });
+
+  describe("loadRulesyncFiles with inputRoot", () => {
+    // Mirror the per-feature inputRoot threading assertion used in
+    // commands-processor.test.ts: when inputRoot is set, loadRulesyncFiles
+    // reads from `<inputRoot>/.rulesync/rules` instead of
+    // `<process.cwd()>/.rulesync/rules`.
+    it("should read rulesync rule files from inputRoot instead of process.cwd()", async () => {
+      // Source rules live in a custom directory — NOT under cwd's `.rulesync/`.
+      const customInputRoot = join(testDir, "custom-rulesync-dir");
+      await ensureDir(join(customInputRoot, RULESYNC_RULES_RELATIVE_DIR_PATH));
+      await writeFileContent(
+        join(customInputRoot, RULESYNC_RULES_RELATIVE_DIR_PATH, "overview.md"),
+        `---
+root: true
+targets: ["*"]
+---
+# Input-root rule`,
+      );
+
+      // outputRoot is process.cwd() (testDir) where the rulesync directory
+      // does NOT exist. If inputRoot threading is broken, this test fails
+      // because no rules would be found under testDir/.rulesync/rules/.
+      const processor = new RulesProcessor({
+        logger,
+        outputRoot: testDir,
+        inputRoot: customInputRoot,
+        toolTarget: "claudecode",
+      });
+
+      const rulesyncFiles = await processor.loadRulesyncFiles();
+      expect(rulesyncFiles).toHaveLength(1);
+      // Assert directly on the loaded rule, not by re-reading the file we
+      // just wrote: the meaningful check is that the rule's parsed body and
+      // frontmatter come from the inputRoot file, not from anywhere under
+      // outputRoot/process.cwd().
+      const loadedRule = rulesyncFiles[0] as RulesyncRule;
+      expect(loadedRule.getFrontmatter().root).toBe(true);
+      expect(loadedRule.getBody()).toContain("Input-root rule");
+    });
+  });
+
+  describe("kilo instructions registration", () => {
+    it("should register non-root rules in kilo.jsonc instructions and not the root rule", async () => {
+      const processor = new RulesProcessor({ logger, toolTarget: "kilo" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "overview.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "Root rule",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "detail.md",
+          frontmatter: { root: false, targets: ["*"] },
+          body: "Detail rule",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      // The non-root rule is emitted under .kilo/rules/
+      const ruleFile = result.find((f) => f.getRelativeFilePath() === "detail.md");
+      expect(ruleFile).toBeDefined();
+      expect(ruleFile?.getRelativeDirPath()).toBe(join(".kilo", "rules"));
+
+      // A kilo.jsonc file is also produced with the non-root rule registered.
+      const kiloConfig = result.find((f) => f.getRelativeFilePath() === "kilo.jsonc");
+      expect(kiloConfig).toBeDefined();
+      const json = JSON.parse(kiloConfig!.getFileContent());
+      expect(json.instructions).toEqual([".kilo/rules/detail.md"]);
+      // Root AGENTS.md must NOT be registered.
+      expect(json.instructions).not.toContain("AGENTS.md");
+    });
+
+    it("should preserve a pre-existing mcp block in kilo.jsonc when registering instructions", async () => {
+      const existingConfig = {
+        mcp: {
+          "my-server": {
+            type: "local",
+            command: ["node", "server.js"],
+            enabled: true,
+          },
+        },
+      };
+      await writeFileContent(join(testDir, "kilo.jsonc"), JSON.stringify(existingConfig, null, 2));
+
+      const processor = new RulesProcessor({ logger, toolTarget: "kilo" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "detail.md",
+          frontmatter: { root: false, targets: ["*"] },
+          body: "Detail rule",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      const kiloConfig = result.find((f) => f.getRelativeFilePath() === "kilo.jsonc");
+      expect(kiloConfig).toBeDefined();
+      const json = JSON.parse(kiloConfig!.getFileContent());
+      expect(json.mcp).toEqual(existingConfig.mcp);
+      expect(json.instructions).toEqual([".kilo/rules/detail.md"]);
+    });
+
+    it("should not produce a kilo.jsonc when only a root rule exists", async () => {
+      const processor = new RulesProcessor({ logger, toolTarget: "kilo" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "overview.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "Root rule",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      expect(result.find((f) => f.getRelativeFilePath() === "kilo.jsonc")).toBeUndefined();
+    });
+  });
+
+  describe("opencode instructions registration", () => {
+    it("should register non-root rules in opencode.jsonc instructions and not the root rule", async () => {
+      const processor = new RulesProcessor({ logger, toolTarget: "opencode" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "overview.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "Root rule",
+        }),
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "detail.md",
+          frontmatter: { root: false, targets: ["*"] },
+          body: "Detail rule",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      // The non-root rule is emitted under .opencode/memories/
+      const ruleFile = result.find((f) => f.getRelativeFilePath() === "detail.md");
+      expect(ruleFile).toBeDefined();
+      expect(ruleFile?.getRelativeDirPath()).toBe(join(".opencode", "memories"));
+
+      // An opencode.jsonc file is also produced with the non-root rule registered.
+      const opencodeConfig = result.find((f) => f.getRelativeFilePath() === "opencode.jsonc");
+      expect(opencodeConfig).toBeDefined();
+      const json = JSON.parse(opencodeConfig!.getFileContent());
+      expect(json.instructions).toEqual([".opencode/memories/detail.md"]);
+      // Root AGENTS.md must NOT be registered (it is auto-loaded).
+      expect(json.instructions).not.toContain("AGENTS.md");
+    });
+
+    it("should not produce an opencode.jsonc when only a root rule exists", async () => {
+      const processor = new RulesProcessor({ logger, toolTarget: "opencode" });
+
+      const rulesyncRules = [
+        new RulesyncRule({
+          outputRoot: testDir,
+          relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+          relativeFilePath: "overview.md",
+          frontmatter: { root: true, targets: ["*"] },
+          body: "Root rule",
+        }),
+      ];
+
+      const result = await processor.convertRulesyncFilesToToolFiles(rulesyncRules);
+
+      expect(
+        result.find(
+          (f) =>
+            f.getRelativeFilePath() === "opencode.jsonc" ||
+            f.getRelativeFilePath() === "opencode.json",
+        ),
+      ).toBeUndefined();
     });
   });
 });

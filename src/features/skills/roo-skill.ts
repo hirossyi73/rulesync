@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod/mini";
 
 import { SKILL_FILE_NAME } from "../../constants/general.js";
+import { ROO_SKILLS_DIR_PATH } from "../../constants/roo-paths.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
 import { formatError } from "../../utils/error.js";
@@ -15,7 +16,7 @@ import {
   ToolSkillSettablePaths,
 } from "./tool-skill.js";
 
-export const RooSkillFrontmatterSchema = z.looseObject({
+const RooSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
 });
@@ -23,7 +24,7 @@ export const RooSkillFrontmatterSchema = z.looseObject({
 export type RooSkillFrontmatter = z.infer<typeof RooSkillFrontmatterSchema>;
 
 export type RooSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: RooSkillFrontmatter;
@@ -39,8 +40,8 @@ export type RooSkillParams = {
  */
 export class RooSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".roo", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = ROO_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -49,7 +50,7 @@ export class RooSkill extends ToolSkill {
     global = false,
   }: RooSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -75,11 +76,11 @@ export class RooSkill extends ToolSkill {
     global?: boolean;
   } = {}): ToolSkillSettablePaths {
     // Roo Code skills use the same relative path for both project and global modes
-    // The actual location differs based on baseDir:
+    // The actual location differs based on outputRoot:
     // - Project mode: {process.cwd()}/.roo/skills/
     // - Global mode: {getHomeDirectory()}/.roo/skills/
     return {
-      relativeDirPath: join(".roo", "skills"),
+      relativeDirPath: ROO_SKILLS_DIR_PATH,
     };
   }
 
@@ -131,7 +132,7 @@ export class RooSkill extends ToolSkill {
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -143,7 +144,7 @@ export class RooSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
@@ -157,7 +158,7 @@ export class RooSkill extends ToolSkill {
     };
 
     return new RooSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rooFrontmatter.name,
       frontmatter: rooFrontmatter,
@@ -181,7 +182,7 @@ export class RooSkill extends ToolSkill {
 
     const result = RooSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
@@ -189,7 +190,7 @@ export class RooSkill extends ToolSkill {
 
     if (result.data.name !== loaded.dirName) {
       const skillFilePath = join(
-        loaded.baseDir,
+        loaded.outputRoot,
         loaded.relativeDirPath,
         loaded.dirName,
         SKILL_FILE_NAME,
@@ -200,7 +201,7 @@ export class RooSkill extends ToolSkill {
     }
 
     return new RooSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -212,13 +213,13 @@ export class RooSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): RooSkill {
     return new RooSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

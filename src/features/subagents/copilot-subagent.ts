@@ -2,6 +2,10 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import {
+  COPILOT_AGENTS_DIR_PATH,
+  COPILOTCLI_AGENTS_DIR_PATH,
+} from "../../constants/copilot-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
@@ -44,6 +48,26 @@ const ensureRequiredTool = (tools: string[]): string[] => {
   return Array.from(mergedTools);
 };
 
+const toCopilotAgentFilePath = (relativeFilePath: string): string => {
+  if (relativeFilePath.endsWith(".agent.md")) {
+    return relativeFilePath;
+  }
+
+  if (relativeFilePath.endsWith(".md")) {
+    return relativeFilePath.replace(/\.md$/, ".agent.md");
+  }
+
+  return relativeFilePath;
+};
+
+const toRulesyncFilePath = (relativeFilePath: string): string => {
+  if (relativeFilePath.endsWith(".agent.md")) {
+    return relativeFilePath.replace(/\.agent\.md$/, ".md");
+  }
+
+  return relativeFilePath;
+};
+
 export class CopilotSubagent extends ToolSubagent {
   private readonly frontmatter: CopilotSubagentFrontmatter;
   private readonly body: string;
@@ -66,9 +90,18 @@ export class CopilotSubagent extends ToolSubagent {
     this.body = body;
   }
 
-  static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
+  static getSettablePaths({
+    global = false,
+  }: { global?: boolean } = {}): ToolSubagentSettablePaths {
+    if (global) {
+      // VS Code Copilot user-profile (global) custom agents live under the home
+      // directory at `~/.copilot/agents/`, the same location the Copilot CLI
+      // uses. The harness sets `outputRoot` to the home dir for `--global`.
+      // Reference: https://code.visualstudio.com/docs/copilot/agents/custom-agents
+      return { relativeDirPath: COPILOTCLI_AGENTS_DIR_PATH };
+    }
     return {
-      relativeDirPath: join(".github", "agents"),
+      relativeDirPath: COPILOT_AGENTS_DIR_PATH,
     };
   }
 
@@ -94,17 +127,17 @@ export class CopilotSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".", // RulesyncCommand baseDir is always the project root directory
+      outputRoot: ".", // RulesyncCommand outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
-      relativeFilePath: this.getRelativeFilePath(),
+      relativeFilePath: toRulesyncFilePath(this.getRelativeFilePath()),
       validate: true,
     });
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -130,11 +163,11 @@ export class CopilotSubagent extends ToolSubagent {
     const paths = this.getSettablePaths({ global });
 
     return new CopilotSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: copilotFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
-      relativeFilePath: rulesyncSubagent.getRelativeFilePath(),
+      relativeFilePath: toCopilotAgentFilePath(rulesyncSubagent.getRelativeFilePath()),
       fileContent,
       validate,
       global,
@@ -167,13 +200,13 @@ export class CopilotSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<CopilotSubagent> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
 
@@ -183,7 +216,7 @@ export class CopilotSubagent extends ToolSubagent {
     }
 
     return new CopilotSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: relativeFilePath,
       frontmatter: result.data,
@@ -195,12 +228,12 @@ export class CopilotSubagent extends ToolSubagent {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): CopilotSubagent {
     return new CopilotSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { name: "", description: "" },

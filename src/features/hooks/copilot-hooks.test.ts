@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
 import { CopilotHooks } from "./copilot-hooks.js";
@@ -56,7 +57,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -64,7 +65,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -82,6 +83,35 @@ describe("CopilotHooks", () => {
       expect(parsed.hooks.stop).toBeUndefined();
     });
 
+    it("should map canonical stop/subagentStop to agentStop/subagentStop", async () => {
+      const config = {
+        version: 1,
+        hooks: {
+          stop: [{ command: ".rulesync/hooks/agent-stop.sh" }],
+          subagentStop: [{ command: ".rulesync/hooks/subagent-stop.sh" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const copilotHooks = await CopilotHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const parsed = JSON.parse(copilotHooks.getFileContent());
+      expect(parsed.hooks.agentStop).toBeDefined();
+      expect(parsed.hooks.subagentStop).toBeDefined();
+      // Canonical names must not leak into the generated Copilot file.
+      expect(parsed.hooks.stop).toBeUndefined();
+    });
+
     it("should use bash field on non-Windows and timeoutSec instead of timeout", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const config = {
@@ -91,7 +121,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -99,7 +129,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -125,7 +155,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -133,7 +163,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -156,7 +186,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -164,7 +194,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -187,7 +217,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -195,7 +225,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -218,7 +248,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -226,7 +256,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -252,7 +282,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -260,7 +290,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -282,7 +312,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -290,7 +320,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -314,7 +344,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -322,7 +352,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -346,7 +376,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -354,7 +384,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -382,7 +412,7 @@ describe("CopilotHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -390,7 +420,7 @@ describe("CopilotHooks", () => {
       });
 
       const copilotHooks = await CopilotHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -415,7 +445,7 @@ describe("CopilotHooks", () => {
   describe("toRulesyncHooks", () => {
     it("should throw error with descriptive message when content contains invalid JSON", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: "invalid json {",
@@ -427,7 +457,7 @@ describe("CopilotHooks", () => {
 
     it("should convert Copilot hooks with bash-only to canonical format", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -452,9 +482,31 @@ describe("CopilotHooks", () => {
       expect(json.hooks.afterError?.[0]?.command).toBe("handle-error.sh");
     });
 
+    it("should map agentStop/subagentStop back to canonical stop/subagentStop", () => {
+      const copilotHooks = new CopilotHooks({
+        outputRoot: testDir,
+        relativeDirPath: join(".github", "hooks"),
+        relativeFilePath: "copilot-hooks.json",
+        fileContent: JSON.stringify({
+          version: 1,
+          hooks: {
+            agentStop: [{ type: "command", bash: "agent-stop.sh" }],
+            subagentStop: [{ type: "command", bash: "subagent-stop.sh" }],
+          },
+        }),
+        validate: false,
+      });
+
+      const json = copilotHooks.toRulesyncHooks().getJson();
+      expect(json.hooks.stop).toHaveLength(1);
+      expect(json.hooks.stop?.[0]?.command).toBe("agent-stop.sh");
+      expect(json.hooks.subagentStop).toHaveLength(1);
+      expect(json.hooks.subagentStop?.[0]?.command).toBe("subagent-stop.sh");
+    });
+
     it("should convert Copilot hooks with powershell-only to canonical format", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -475,16 +527,10 @@ describe("CopilotHooks", () => {
 
     it("should use bash when both bash and powershell are present on non-Windows", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const warnCalls: string[] = [];
-      vi.spyOn(await import("../../utils/logger.js"), "logger", "get").mockReturnValue({
-        warn: (msg: string) => warnCalls.push(msg),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as never);
+      const logger = createMockLogger();
 
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -498,26 +544,20 @@ describe("CopilotHooks", () => {
         validate: false,
       });
 
-      const rulesyncHooks = copilotHooks.toRulesyncHooks();
+      const rulesyncHooks = copilotHooks.toRulesyncHooks({ logger });
       const json = rulesyncHooks.getJson();
       expect(json.hooks.sessionStart?.[0]?.command).toBe("echo start");
-      expect(warnCalls.some((msg) => msg.includes("bash") && msg.includes("powershell"))).toBe(
-        true,
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        "Copilot hook has both bash and powershell commands; using bash and ignoring powershell on this platform.",
       );
     });
 
-    it("should use powershell when both bash and powershell are present on Windows", async () => {
+    it("should use powershell when both bash and powershell are present on Windows", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const warnCalls: string[] = [];
-      vi.spyOn(await import("../../utils/logger.js"), "logger", "get").mockReturnValue({
-        warn: (msg: string) => warnCalls.push(msg),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as never);
+      const logger = createMockLogger();
 
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -531,17 +571,17 @@ describe("CopilotHooks", () => {
         validate: false,
       });
 
-      const rulesyncHooks = copilotHooks.toRulesyncHooks();
+      const rulesyncHooks = copilotHooks.toRulesyncHooks({ logger });
       const json = rulesyncHooks.getJson();
       expect(json.hooks.sessionStart?.[0]?.command).toBe("Write-Output start");
-      expect(warnCalls.some((msg) => msg.includes("bash") && msg.includes("powershell"))).toBe(
-        true,
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        "Copilot hook has both bash and powershell commands; using powershell and ignoring bash on this platform.",
       );
     });
 
     it("should handle empty hooks", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({ version: 1, hooks: {} }),
@@ -555,7 +595,7 @@ describe("CopilotHooks", () => {
 
     it("should skip invalid hook entries", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -581,7 +621,7 @@ describe("CopilotHooks", () => {
 
     it("should not import unknown keys when converting to canonical hooks", () => {
       const copilotHooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: JSON.stringify({
@@ -615,7 +655,7 @@ describe("CopilotHooks", () => {
       );
 
       const copilotHooks = await CopilotHooks.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
       expect(copilotHooks).toBeInstanceOf(CopilotHooks);
@@ -626,7 +666,7 @@ describe("CopilotHooks", () => {
 
     it("should initialize empty hooks when copilot-hooks.json does not exist", async () => {
       const copilotHooks = await CopilotHooks.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
       expect(copilotHooks).toBeInstanceOf(CopilotHooks);
@@ -639,7 +679,7 @@ describe("CopilotHooks", () => {
   describe("isDeletable", () => {
     it("should return true (default from ToolFile)", () => {
       const hooks = new CopilotHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
         fileContent: '{"version":1,"hooks":{}}',
@@ -653,7 +693,7 @@ describe("CopilotHooks", () => {
   describe("forDeletion", () => {
     it("should return CopilotHooks instance with empty hooks for deletion path", () => {
       const hooks = CopilotHooks.forDeletion({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".github", "hooks"),
         relativeFilePath: "copilot-hooks.json",
       });

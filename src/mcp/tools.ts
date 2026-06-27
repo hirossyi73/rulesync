@@ -17,10 +17,13 @@ import {
   RulesyncSubagentFrontmatterSchema,
 } from "../features/subagents/rulesync-subagent.js";
 import { commandTools } from "./commands.js";
+import { convertOptionsSchema, convertTools } from "./convert.js";
 import { generateOptionsSchema, generateTools } from "./generate.js";
+import { hooksTools } from "./hooks.js";
 import { ignoreTools } from "./ignore.js";
 import { importOptionsSchema, importTools } from "./import.js";
 import { mcpTools } from "./mcp.js";
+import { permissionsTools } from "./permissions.js";
 import { ruleTools } from "./rules.js";
 import { skillTools } from "./skills.js";
 import { subagentTools } from "./subagents.js";
@@ -32,8 +35,11 @@ const rulesyncFeatureSchema = z.enum([
   "skill",
   "ignore",
   "mcp",
+  "permissions",
+  "hooks",
   "generate",
   "import",
+  "convert",
 ]);
 
 const rulesyncOperationSchema = z.enum(["list", "get", "put", "delete", "run"]);
@@ -53,6 +59,7 @@ const rulesyncToolSchema = z.object({
   content: z.optional(z.string()),
   generateOptions: z.optional(generateOptionsSchema),
   importOptions: z.optional(importOptionsSchema),
+  convertOptions: z.optional(convertOptionsSchema),
 });
 
 type RulesyncFeature = z.infer<typeof rulesyncFeatureSchema>;
@@ -60,7 +67,7 @@ type RulesyncOperation = z.infer<typeof rulesyncOperationSchema>;
 type RulesyncToolArgs = z.infer<typeof rulesyncToolSchema>;
 type RulesyncFrontmatterFeature = Exclude<
   RulesyncFeature,
-  "ignore" | "mcp" | "generate" | "import"
+  "ignore" | "mcp" | "permissions" | "hooks" | "generate" | "import" | "convert"
 >;
 type RulesyncFrontmatterByFeature = {
   rule: RulesyncRuleFrontmatter;
@@ -76,8 +83,11 @@ const supportedOperationsByFeature: Record<RulesyncFeature, RulesyncOperation[]>
   skill: ["list", "get", "put", "delete"],
   ignore: ["get", "put", "delete"],
   mcp: ["get", "put", "delete"],
+  permissions: ["get", "put", "delete"],
+  hooks: ["get", "put", "delete"],
   generate: ["run"],
   import: ["run"],
+  convert: ["run"],
 };
 
 function assertSupported({
@@ -172,160 +182,229 @@ function ensureBody({ body, feature, operation }: RulesyncToolArgs): string {
   return body;
 }
 
+function requireContent({
+  content,
+  feature,
+}: {
+  content: string | undefined;
+  feature: string;
+}): string {
+  if (!content) {
+    throw new Error(`content is required for ${feature} put operation`);
+  }
+
+  return content;
+}
+
+function executeRule(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "list") {
+    return ruleTools.listRules.execute();
+  }
+
+  if (parsed.operation === "get") {
+    return ruleTools.getRule.execute({ relativePathFromCwd: requireTargetPath(parsed) });
+  }
+
+  if (parsed.operation === "put") {
+    return ruleTools.putRule.execute({
+      relativePathFromCwd: requireTargetPath(parsed),
+      frontmatter: parseFrontmatter({
+        feature: "rule",
+        frontmatter: parsed.frontmatter ?? {},
+      }),
+      body: ensureBody(parsed),
+    });
+  }
+
+  return ruleTools.deleteRule.execute({ relativePathFromCwd: requireTargetPath(parsed) });
+}
+
+function executeCommand(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "list") {
+    return commandTools.listCommands.execute();
+  }
+
+  if (parsed.operation === "get") {
+    return commandTools.getCommand.execute({
+      relativePathFromCwd: requireTargetPath(parsed),
+    });
+  }
+
+  if (parsed.operation === "put") {
+    return commandTools.putCommand.execute({
+      relativePathFromCwd: requireTargetPath(parsed),
+      frontmatter: parseFrontmatter({
+        feature: "command",
+        frontmatter: parsed.frontmatter ?? {},
+      }),
+      body: ensureBody(parsed),
+    });
+  }
+
+  return commandTools.deleteCommand.execute({
+    relativePathFromCwd: requireTargetPath(parsed),
+  });
+}
+
+function executeSubagent(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "list") {
+    return subagentTools.listSubagents.execute();
+  }
+
+  if (parsed.operation === "get") {
+    return subagentTools.getSubagent.execute({
+      relativePathFromCwd: requireTargetPath(parsed),
+    });
+  }
+
+  if (parsed.operation === "put") {
+    return subagentTools.putSubagent.execute({
+      relativePathFromCwd: requireTargetPath(parsed),
+      frontmatter: parseFrontmatter({
+        feature: "subagent",
+        frontmatter: parsed.frontmatter ?? {},
+      }),
+      body: ensureBody(parsed),
+    });
+  }
+
+  return subagentTools.deleteSubagent.execute({
+    relativePathFromCwd: requireTargetPath(parsed),
+  });
+}
+
+function executeSkill(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "list") {
+    return skillTools.listSkills.execute();
+  }
+
+  if (parsed.operation === "get") {
+    return skillTools.getSkill.execute({ relativeDirPathFromCwd: requireTargetPath(parsed) });
+  }
+
+  if (parsed.operation === "put") {
+    return skillTools.putSkill.execute({
+      relativeDirPathFromCwd: requireTargetPath(parsed),
+      frontmatter: parseFrontmatter({
+        feature: "skill",
+        frontmatter: parsed.frontmatter ?? {},
+      }),
+      body: ensureBody(parsed),
+      otherFiles: parsed.otherFiles ?? [],
+    });
+  }
+
+  return skillTools.deleteSkill.execute({
+    relativeDirPathFromCwd: requireTargetPath(parsed),
+  });
+}
+
+function executeIgnore(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "get") {
+    return ignoreTools.getIgnoreFile.execute();
+  }
+
+  if (parsed.operation === "put") {
+    return ignoreTools.putIgnoreFile.execute({
+      content: requireContent({ content: parsed.content, feature: "ignore" }),
+    });
+  }
+
+  return ignoreTools.deleteIgnoreFile.execute();
+}
+
+function executeMcp(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "get") {
+    return mcpTools.getMcpFile.execute();
+  }
+
+  if (parsed.operation === "put") {
+    return mcpTools.putMcpFile.execute({
+      content: requireContent({ content: parsed.content, feature: "mcp" }),
+    });
+  }
+
+  return mcpTools.deleteMcpFile.execute();
+}
+
+function executePermissions(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "get") {
+    return permissionsTools.getPermissionsFile.execute();
+  }
+
+  if (parsed.operation === "put") {
+    return permissionsTools.putPermissionsFile.execute({
+      content: requireContent({ content: parsed.content, feature: "permissions" }),
+    });
+  }
+
+  return permissionsTools.deletePermissionsFile.execute();
+}
+
+function executeHooks(parsed: RulesyncToolArgs) {
+  if (parsed.operation === "get") {
+    return hooksTools.getHooksFile.execute();
+  }
+
+  if (parsed.operation === "put") {
+    return hooksTools.putHooksFile.execute({
+      content: requireContent({ content: parsed.content, feature: "hooks" }),
+    });
+  }
+
+  return hooksTools.deleteHooksFile.execute();
+}
+
+function executeGenerate(parsed: RulesyncToolArgs) {
+  // Only "run" operation is supported for generate feature
+  return generateTools.executeGenerate.execute(parsed.generateOptions ?? {});
+}
+
+function executeImport(parsed: RulesyncToolArgs) {
+  // Only "run" operation is supported for import feature
+  if (!parsed.importOptions) {
+    throw new Error("importOptions is required for import feature");
+  }
+  return importTools.executeImport.execute(parsed.importOptions);
+}
+
+function executeConvert(parsed: RulesyncToolArgs) {
+  // Only "run" operation is supported for convert feature
+  if (!parsed.convertOptions) {
+    throw new Error("convertOptions is required for convert feature");
+  }
+  return convertTools.executeConvert.execute(parsed.convertOptions);
+}
+
+const featureExecutors: Record<RulesyncFeature, (parsed: RulesyncToolArgs) => Promise<string>> = {
+  rule: executeRule,
+  command: executeCommand,
+  subagent: executeSubagent,
+  skill: executeSkill,
+  ignore: executeIgnore,
+  mcp: executeMcp,
+  permissions: executePermissions,
+  hooks: executeHooks,
+  generate: executeGenerate,
+  import: executeImport,
+  convert: executeConvert,
+};
+
 export const rulesyncTool = {
   name: "rulesyncTool",
   description:
-    "Manage Rulesync files through a single MCP tool. Features: rule/command/subagent/skill support list/get/put/delete; ignore/mcp support get/put/delete only; generate supports run only; import supports run only. Parameters: list requires no targetPathFromCwd (lists all items); get/delete require targetPathFromCwd; put requires targetPathFromCwd, frontmatter, and body (or content for ignore/mcp); generate/run uses generateOptions to configure generation; import/run uses importOptions to configure import.",
+    "Manage Rulesync files through a single MCP tool. Features: rule/command/subagent/skill support list/get/put/delete; ignore/mcp/permissions/hooks support get/put/delete only; generate supports run only; import supports run only; convert supports run only. Parameters: list requires no targetPathFromCwd (lists all items); get/delete require targetPathFromCwd; put requires targetPathFromCwd, frontmatter, and body (or content for ignore/mcp/permissions/hooks); generate/run uses generateOptions to configure generation; import/run uses importOptions to configure import; convert/run uses convertOptions to configure conversion.",
   parameters: rulesyncToolSchema,
   execute: async (args: RulesyncToolArgs) => {
     const parsed = rulesyncToolSchema.parse(args);
 
     assertSupported({ feature: parsed.feature, operation: parsed.operation });
 
-    switch (parsed.feature) {
-      case "rule": {
-        if (parsed.operation === "list") {
-          return ruleTools.listRules.execute();
-        }
-
-        if (parsed.operation === "get") {
-          return ruleTools.getRule.execute({ relativePathFromCwd: requireTargetPath(parsed) });
-        }
-
-        if (parsed.operation === "put") {
-          return ruleTools.putRule.execute({
-            relativePathFromCwd: requireTargetPath(parsed),
-            frontmatter: parseFrontmatter({
-              feature: "rule",
-              frontmatter: parsed.frontmatter ?? {},
-            }),
-            body: ensureBody(parsed),
-          });
-        }
-
-        return ruleTools.deleteRule.execute({ relativePathFromCwd: requireTargetPath(parsed) });
-      }
-      case "command": {
-        if (parsed.operation === "list") {
-          return commandTools.listCommands.execute();
-        }
-
-        if (parsed.operation === "get") {
-          return commandTools.getCommand.execute({
-            relativePathFromCwd: requireTargetPath(parsed),
-          });
-        }
-
-        if (parsed.operation === "put") {
-          return commandTools.putCommand.execute({
-            relativePathFromCwd: requireTargetPath(parsed),
-            frontmatter: parseFrontmatter({
-              feature: "command",
-              frontmatter: parsed.frontmatter ?? {},
-            }),
-            body: ensureBody(parsed),
-          });
-        }
-
-        return commandTools.deleteCommand.execute({
-          relativePathFromCwd: requireTargetPath(parsed),
-        });
-      }
-      case "subagent": {
-        if (parsed.operation === "list") {
-          return subagentTools.listSubagents.execute();
-        }
-
-        if (parsed.operation === "get") {
-          return subagentTools.getSubagent.execute({
-            relativePathFromCwd: requireTargetPath(parsed),
-          });
-        }
-
-        if (parsed.operation === "put") {
-          return subagentTools.putSubagent.execute({
-            relativePathFromCwd: requireTargetPath(parsed),
-            frontmatter: parseFrontmatter({
-              feature: "subagent",
-              frontmatter: parsed.frontmatter ?? {},
-            }),
-            body: ensureBody(parsed),
-          });
-        }
-
-        return subagentTools.deleteSubagent.execute({
-          relativePathFromCwd: requireTargetPath(parsed),
-        });
-      }
-      case "skill": {
-        if (parsed.operation === "list") {
-          return skillTools.listSkills.execute();
-        }
-
-        if (parsed.operation === "get") {
-          return skillTools.getSkill.execute({ relativeDirPathFromCwd: requireTargetPath(parsed) });
-        }
-
-        if (parsed.operation === "put") {
-          return skillTools.putSkill.execute({
-            relativeDirPathFromCwd: requireTargetPath(parsed),
-            frontmatter: parseFrontmatter({
-              feature: "skill",
-              frontmatter: parsed.frontmatter ?? {},
-            }),
-            body: ensureBody(parsed),
-            otherFiles: parsed.otherFiles ?? [],
-          });
-        }
-
-        return skillTools.deleteSkill.execute({
-          relativeDirPathFromCwd: requireTargetPath(parsed),
-        });
-      }
-      case "ignore": {
-        if (parsed.operation === "get") {
-          return ignoreTools.getIgnoreFile.execute();
-        }
-
-        if (parsed.operation === "put") {
-          if (!parsed.content) {
-            throw new Error("content is required for ignore put operation");
-          }
-
-          return ignoreTools.putIgnoreFile.execute({ content: parsed.content });
-        }
-
-        return ignoreTools.deleteIgnoreFile.execute();
-      }
-      case "mcp": {
-        if (parsed.operation === "get") {
-          return mcpTools.getMcpFile.execute();
-        }
-
-        if (parsed.operation === "put") {
-          if (!parsed.content) {
-            throw new Error("content is required for mcp put operation");
-          }
-
-          return mcpTools.putMcpFile.execute({ content: parsed.content });
-        }
-
-        return mcpTools.deleteMcpFile.execute();
-      }
-      case "generate": {
-        // Only "run" operation is supported for generate feature
-        return generateTools.executeGenerate.execute(parsed.generateOptions ?? {});
-      }
-      case "import": {
-        // Only "run" operation is supported for import feature
-        if (!parsed.importOptions) {
-          throw new Error("importOptions is required for import feature");
-        }
-        return importTools.executeImport.execute(parsed.importOptions);
-      }
-      default: {
-        throw new Error(`Unknown feature: ${parsed.feature}`);
-      }
+    const executor = featureExecutors[parsed.feature];
+    if (!executor) {
+      throw new Error(`Unknown feature: ${parsed.feature}`);
     }
+
+    return executor(parsed);
   },
 } as const;

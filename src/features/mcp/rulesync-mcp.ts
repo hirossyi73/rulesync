@@ -13,7 +13,7 @@ import {
 } from "../../types/rulesync-file.js";
 import { RulesyncTargetsSchema } from "../../types/tool-targets.js";
 import { fileExists, readFileContent } from "../../utils/file.js";
-import { logger } from "../../utils/logger.js";
+import type { Logger } from "../../utils/logger.js";
 
 // Schema for rulesync MCP server (extends base schema with optional targets)
 // Note: targets defaults to ["*"] when omitted (applied during filtering, not at parse time)
@@ -28,9 +28,14 @@ const RulesyncMcpConfigSchema = z.object({
 });
 type RulesyncMcpConfig = z.infer<typeof RulesyncMcpConfigSchema>;
 
+export const RulesyncMcpFileSchema = z.looseObject({
+  $schema: z.optional(z.string()),
+  ...RulesyncMcpConfigSchema.shape,
+});
+
 export type RulesyncMcpParams = RulesyncFileParams;
 
-export type RulesyncMcpFromFileParams = Pick<RulesyncFileFromFileParams, "validate">;
+export type RulesyncMcpFromFileParams = Pick<RulesyncFileFromFileParams, "outputRoot" | "validate">;
 
 export type RulesyncMcpSettablePaths = {
   recommended: {
@@ -73,28 +78,35 @@ export class RulesyncMcp extends RulesyncFile {
   }
 
   validate(): ValidationResult {
-    const result = RulesyncMcpConfigSchema.safeParse(this.json);
+    const result = RulesyncMcpFileSchema.safeParse(this.json);
     if (!result.success) {
       return { success: false, error: result.error };
     }
     return { success: true, error: null };
   }
 
-  static async fromFile({ validate = true }: RulesyncMcpFromFileParams): Promise<RulesyncMcp> {
-    const baseDir = process.cwd();
+  static async fromFile({
+    outputRoot = process.cwd(),
+    validate = true,
+    logger,
+  }: RulesyncMcpFromFileParams & { logger?: Logger }): Promise<RulesyncMcp> {
     const paths = this.getSettablePaths();
     const recommendedPath = join(
-      baseDir,
+      outputRoot,
       paths.recommended.relativeDirPath,
       paths.recommended.relativeFilePath,
     );
-    const legacyPath = join(baseDir, paths.legacy.relativeDirPath, paths.legacy.relativeFilePath);
+    const legacyPath = join(
+      outputRoot,
+      paths.legacy.relativeDirPath,
+      paths.legacy.relativeFilePath,
+    );
 
     // Check if recommended path exists
     if (await fileExists(recommendedPath)) {
       const fileContent = await readFileContent(recommendedPath);
       return new RulesyncMcp({
-        baseDir,
+        outputRoot,
         relativeDirPath: paths.recommended.relativeDirPath,
         relativeFilePath: paths.recommended.relativeFilePath,
         fileContent,
@@ -104,12 +116,12 @@ export class RulesyncMcp extends RulesyncFile {
 
     // Fall back to legacy path
     if (await fileExists(legacyPath)) {
-      logger.warn(
+      logger?.warn(
         `⚠️  Using deprecated path "${legacyPath}". Please migrate to "${recommendedPath}"`,
       );
       const fileContent = await readFileContent(legacyPath);
       return new RulesyncMcp({
-        baseDir,
+        outputRoot,
         relativeDirPath: paths.legacy.relativeDirPath,
         relativeFilePath: paths.legacy.relativeFilePath,
         fileContent,
@@ -120,7 +132,7 @@ export class RulesyncMcp extends RulesyncFile {
     // If neither exists, try to read recommended path (will throw appropriate error)
     const fileContent = await readFileContent(recommendedPath);
     return new RulesyncMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.recommended.relativeDirPath,
       relativeFilePath: paths.recommended.relativeFilePath,
       fileContent,
@@ -129,11 +141,19 @@ export class RulesyncMcp extends RulesyncFile {
   }
 
   getMcpServers(): McpServers {
-    const entries = Object.entries(this.json.mcpServers);
+    // Tolerate missing/empty mcpServers (e.g., a RulesyncMcp constructed
+    // from `{}` with validation disabled). Callers that previously read
+    // `getJson().mcpServers` via the `isMcpServers` guard relied on this
+    // resilience.
+    const mcpServers = this.json.mcpServers ?? {};
+    const entries = Object.entries(mcpServers);
 
     return Object.fromEntries(
       entries.map(([serverName, serverConfig]) => {
-        return [serverName, omit(serverConfig, ["targets", "description", "exposed"])];
+        // `envVars` is codex-specific: the codex generator reads it directly
+        // from the unfiltered source JSON. Strip here so it does not leak
+        // into other tools' outputs.
+        return [serverName, omit(serverConfig, ["targets", "description", "exposed", "envVars"])];
       }),
     );
   }
@@ -153,7 +173,7 @@ export class RulesyncMcp extends RulesyncFile {
     );
 
     return new RulesyncMcp({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: this.relativeDirPath,
       relativeFilePath: this.relativeFilePath,
       fileContent: JSON.stringify({ mcpServers: filteredServers }, null, 2),

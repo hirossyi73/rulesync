@@ -84,6 +84,7 @@ export default defineConfig({
           { text: "Why Rulesync?", link: "/guide/why-rulesync" },
           { text: "Configuration", link: "/guide/configuration" },
           { text: "Global Mode", link: "/guide/global-mode" },
+          { text: "Separate Input Root", link: "/guide/separate-input-root" },
           {
             text: "Simulated Features",
             link: "/guide/simulated-features",
@@ -106,6 +107,7 @@ export default defineConfig({
           },
           { text: "CLI Commands", link: "/reference/cli-commands" },
           { text: "File Formats", link: "/reference/file-formats" },
+          { text: "Command Syntax", link: "/reference/command-syntax" },
           { text: "MCP Server", link: "/reference/mcp-server" },
         ],
       },

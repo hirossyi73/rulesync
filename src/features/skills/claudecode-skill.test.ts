@@ -104,7 +104,7 @@ describe("ClaudecodeSkill", () => {
       };
 
       const skill = new ClaudecodeSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "test-skill",
         frontmatter,
         body: "Test body",
@@ -120,7 +120,7 @@ describe("ClaudecodeSkill", () => {
       };
 
       const skill = new ClaudecodeSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join("custom", "skills"),
         dirName: "test-skill",
         frontmatter,
@@ -209,11 +209,13 @@ describe("ClaudecodeSkill", () => {
     it("should return default paths", () => {
       const paths = ClaudecodeSkill.getSettablePaths();
       expect(paths.relativeDirPath).toBe(join(".claude", "skills"));
+      expect(paths.alternativeSkillRoots).toEqual([join(".claude", "scheduled-tasks")]);
     });
 
     it("should return same paths for global mode", () => {
       const paths = ClaudecodeSkill.getSettablePaths({ global: true });
       expect(paths.relativeDirPath).toBe(join(".claude", "skills"));
+      expect(paths.alternativeSkillRoots).toEqual([join(".claude", "scheduled-tasks")]);
     });
   });
 
@@ -262,6 +264,31 @@ describe("ClaudecodeSkill", () => {
       });
     });
 
+    it("should convert to RulesyncSkill with disallowed-tools", () => {
+      const frontmatter: ClaudecodeSkillFrontmatter = {
+        name: "restricted-skill",
+        description: "Restricted skill",
+        "disallowed-tools": ["Bash", "Edit"],
+      };
+
+      const skill = new ClaudecodeSkill({
+        dirName: "restricted-skill",
+        frontmatter,
+        body: "Restricted body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+
+      expect(rulesyncFrontmatter.claudecode).toEqual({
+        "disallowed-tools": ["Bash", "Edit"],
+      });
+
+      // round-trip back to a ClaudecodeSkill preserves disallowed-tools
+      const roundTripped = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(roundTripped.getFrontmatter()["disallowed-tools"]).toEqual(["Bash", "Edit"]);
+    });
+
     it("should convert to RulesyncSkill with model", () => {
       const frontmatter: ClaudecodeSkillFrontmatter = {
         name: "model-skill",
@@ -279,6 +306,55 @@ describe("ClaudecodeSkill", () => {
       const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
 
       expect(rulesyncFrontmatter.claudecode).toEqual({ model: "opus" });
+    });
+
+    it("should round-trip the extended Claude Code skill frontmatter fields", () => {
+      const frontmatter: ClaudecodeSkillFrontmatter = {
+        name: "extended-skill",
+        description: "Skill with extended fields",
+        when_to_use: "When the user asks to review a PR",
+        "allowed-tools": "Read Write Bash",
+        effort: "high",
+        "argument-hint": "[pr-number]",
+        arguments: ["pr_number"],
+        context: "fork",
+        agent: "code-reviewer",
+        hooks: { PreToolUse: [{ matcher: "Bash" }] },
+        shell: "bash",
+      };
+
+      const skill = new ClaudecodeSkill({
+        dirName: "extended-skill",
+        frontmatter,
+        body: "Extended body",
+      });
+
+      const rulesyncFrontmatter = skill.toRulesyncSkill().getFrontmatter();
+      expect(rulesyncFrontmatter.claudecode).toEqual({
+        when_to_use: "When the user asks to review a PR",
+        "allowed-tools": "Read Write Bash",
+        effort: "high",
+        "argument-hint": "[pr-number]",
+        arguments: ["pr_number"],
+        context: "fork",
+        agent: "code-reviewer",
+        hooks: { PreToolUse: [{ matcher: "Bash" }] },
+        shell: "bash",
+      });
+
+      // round-trip back to a ClaudecodeSkill preserves every extended field
+      const roundTripped = ClaudecodeSkill.fromRulesyncSkill({
+        rulesyncSkill: skill.toRulesyncSkill(),
+      }).getFrontmatter();
+      expect(roundTripped.when_to_use).toBe("When the user asks to review a PR");
+      expect(roundTripped["allowed-tools"]).toBe("Read Write Bash");
+      expect(roundTripped.effort).toBe("high");
+      expect(roundTripped["argument-hint"]).toBe("[pr-number]");
+      expect(roundTripped.arguments).toEqual(["pr_number"]);
+      expect(roundTripped.context).toBe("fork");
+      expect(roundTripped.agent).toBe("code-reviewer");
+      expect(roundTripped.hooks).toEqual({ PreToolUse: [{ matcher: "Bash" }] });
+      expect(roundTripped.shell).toBe("bash");
     });
 
     it("should convert to RulesyncSkill with both model and allowed-tools", () => {
@@ -346,6 +422,105 @@ describe("ClaudecodeSkill", () => {
       });
     });
 
+    it("should convert to RulesyncSkill with user-invocable false", () => {
+      const frontmatter: ClaudecodeSkillFrontmatter = {
+        name: "hidden-skill",
+        description: "Skill hidden from the slash menu",
+        "user-invocable": false,
+      };
+
+      const skill = new ClaudecodeSkill({
+        dirName: "hidden-skill",
+        frontmatter,
+        body: "Hidden body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+
+      expect(rulesyncFrontmatter.claudecode).toEqual({
+        "user-invocable": false,
+      });
+    });
+
+    it("should convert to RulesyncSkill with paths as string", () => {
+      const frontmatter: ClaudecodeSkillFrontmatter = {
+        name: "paths-string-skill",
+        description: "Skill with comma-separated paths",
+        paths: "src/**/*.ts,test/**/*.ts",
+      };
+
+      const skill = new ClaudecodeSkill({
+        dirName: "paths-string-skill",
+        frontmatter,
+        body: "Paths string body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+
+      expect(rulesyncFrontmatter.claudecode).toEqual({
+        paths: "src/**/*.ts,test/**/*.ts",
+      });
+    });
+
+    it("should convert to RulesyncSkill with paths as array", () => {
+      const frontmatter: ClaudecodeSkillFrontmatter = {
+        name: "paths-array-skill",
+        description: "Skill with paths list",
+        paths: ["src/**/*.ts", "test/**/*.ts"],
+      };
+
+      const skill = new ClaudecodeSkill({
+        dirName: "paths-array-skill",
+        frontmatter,
+        body: "Paths array body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+
+      expect(rulesyncFrontmatter.claudecode).toEqual({
+        paths: ["src/**/*.ts", "test/**/*.ts"],
+      });
+    });
+
+    it("should preserve an empty-string paths value through a round-trip", () => {
+      const skill = new ClaudecodeSkill({
+        dirName: "empty-paths-string-skill",
+        frontmatter: {
+          name: "empty-paths-string-skill",
+          description: "Skill with an empty paths string",
+          paths: "",
+        },
+        body: "Empty paths string body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().claudecode).toEqual({ paths: "" });
+
+      const roundTripped = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(roundTripped.getFrontmatter().paths).toBe("");
+    });
+
+    it("should preserve an empty-array paths value through a round-trip", () => {
+      const skill = new ClaudecodeSkill({
+        dirName: "empty-paths-array-skill",
+        frontmatter: {
+          name: "empty-paths-array-skill",
+          description: "Skill with an empty paths list",
+          paths: [],
+        },
+        body: "Empty paths array body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().claudecode).toEqual({ paths: [] });
+
+      const roundTripped = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(roundTripped.getFrontmatter().paths).toEqual([]);
+    });
+
     it("should preserve other files during conversion", () => {
       const frontmatter: ClaudecodeSkillFrontmatter = {
         name: "test-skill",
@@ -368,6 +543,23 @@ describe("ClaudecodeSkill", () => {
 
       const rulesyncSkill = skill.toRulesyncSkill();
       expect(rulesyncSkill.getOtherFiles()).toEqual(otherFiles);
+    });
+
+    it("should mark scheduled-task when converting scheduled-task directory", () => {
+      const skill = new ClaudecodeSkill({
+        dirName: "weekly-review",
+        relativeDirPath: join(".claude", "scheduled-tasks"),
+        frontmatter: {
+          name: "weekly-review",
+          description: "Weekly review task",
+        },
+        body: "Run weekly review",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().claudecode).toEqual({
+        "scheduled-task": true,
+      });
     });
   });
 
@@ -485,6 +677,159 @@ describe("ClaudecodeSkill", () => {
       expect(claudecodeSkill.getFrontmatter()["disable-model-invocation"]).toBe(false);
     });
 
+    it("should pick up root-level disable-model-invocation when claudecode section omits it", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "root-default-skill",
+        description: "Skill with root-level disable-model-invocation",
+        "disable-model-invocation": true,
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "root-default-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["disable-model-invocation"]).toBe(true);
+    });
+
+    it("should let claudecode disable-model-invocation override the root-level value", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "override-skill",
+        description: "Skill where the claudecode section overrides the root default",
+        "disable-model-invocation": true,
+        claudecode: { "disable-model-invocation": false },
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "override-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["disable-model-invocation"]).toBe(false);
+    });
+
+    it("should omit disable-model-invocation when neither root nor claudecode set it", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "no-flag-skill",
+        description: "Skill without the flag",
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "no-flag-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["disable-model-invocation"]).toBeUndefined();
+    });
+
+    it("should convert from RulesyncSkill with user-invocable false", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "hidden-skill",
+        description: "Skill hidden from the slash menu",
+        claudecode: { "user-invocable": false },
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "hidden-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Hidden body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["user-invocable"]).toBe(false);
+    });
+
+    it("should omit user-invocable when claudecode section does not set it", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "no-user-invocable-skill",
+        description: "Skill without user-invocable",
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "no-user-invocable-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["user-invocable"]).toBeUndefined();
+    });
+
+    it("should pick up root-level user-invocable when claudecode section omits it", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "root-user-invocable-skill",
+        description: "Skill with root-level user-invocable",
+        "user-invocable": false,
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "root-user-invocable-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["user-invocable"]).toBe(false);
+    });
+
+    it("should let claudecode user-invocable override the root-level value", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "user-invocable-override-skill",
+        description: "Skill where the claudecode section overrides the root default",
+        "user-invocable": true,
+        claudecode: { "user-invocable": false },
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "user-invocable-override-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter()["user-invocable"]).toBe(false);
+    });
+
+    it("should convert from RulesyncSkill with paths as string", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "paths-string-skill",
+        description: "Skill with comma-separated paths",
+        claudecode: { paths: "src/**/*.ts,test/**/*.ts" },
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "paths-string-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Paths string body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter().paths).toBe("src/**/*.ts,test/**/*.ts");
+    });
+
+    it("should convert from RulesyncSkill with paths as array", () => {
+      const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
+        name: "paths-array-skill",
+        description: "Skill with paths list",
+        claudecode: { paths: ["src/**/*.ts", "test/**/*.ts"] },
+      };
+
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "paths-array-skill",
+        frontmatter: rulesyncFrontmatter,
+        body: "Paths array body",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(claudecodeSkill.getFrontmatter().paths).toEqual(["src/**/*.ts", "test/**/*.ts"]);
+    });
+
     it("should set correct relativeDirPath", () => {
       const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
         name: "test-skill",
@@ -492,7 +837,7 @@ describe("ClaudecodeSkill", () => {
       };
 
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "test-skill",
         frontmatter: rulesyncFrontmatter,
         body: "Test body",
@@ -568,6 +913,27 @@ describe("ClaudecodeSkill", () => {
 
       expect(claudecodeSkill.getGlobal()).toBe(true);
     });
+
+    it("should route scheduled-task skills to scheduled-tasks directory", () => {
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "weekly-review",
+        frontmatter: {
+          name: "weekly-review",
+          description: "Weekly review task",
+          claudecode: {
+            "scheduled-task": true,
+          },
+        },
+        body: "Run weekly review",
+      });
+
+      const claudecodeSkill = ClaudecodeSkill.fromRulesyncSkill({
+        rulesyncSkill,
+        global: true,
+      });
+
+      expect(claudecodeSkill.getRelativeDirPath()).toBe(join(".claude", "scheduled-tasks"));
+    });
   });
 
   describe("isTargetedByRulesyncSkill", () => {
@@ -581,6 +947,23 @@ describe("ClaudecodeSkill", () => {
         dirName: "test-skill",
         frontmatter: rulesyncFrontmatter,
         body: "Test body",
+      });
+
+      expect(ClaudecodeSkill.isTargetedByRulesyncSkill(rulesyncSkill)).toBe(true);
+    });
+
+    it("should target scheduled-task even when targets does not include claudecode", () => {
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "scheduled-only",
+        frontmatter: {
+          name: "scheduled-only",
+          description: "Scheduled task",
+          targets: ["cursor"],
+          claudecode: {
+            "scheduled-task": true,
+          },
+        },
+        body: "Scheduled body",
       });
 
       expect(ClaudecodeSkill.isTargetedByRulesyncSkill(rulesyncSkill)).toBe(true);
@@ -607,7 +990,7 @@ This is the skill body.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "test-skill",
       });
 
@@ -633,7 +1016,7 @@ This skill has tool restrictions.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "restricted-skill",
       });
 
@@ -655,11 +1038,57 @@ This skill uses a specific model.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "model-skill",
       });
 
       expect(skill.getFrontmatter().model).toBe("sonnet");
+    });
+
+    it("should load skill with paths as a YAML list", async () => {
+      const skillDir = join(testDir, ".claude", "skills", "paths-list-skill");
+      await ensureDir(skillDir);
+
+      const content = `---
+name: paths-list-skill
+description: Skill scoped to paths
+paths:
+  - src/**/*.ts
+  - test/**/*.ts
+---
+
+This skill is scoped to matching files.`;
+
+      await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
+
+      const skill = await ClaudecodeSkill.fromDir({
+        outputRoot: testDir,
+        dirName: "paths-list-skill",
+      });
+
+      expect(skill.getFrontmatter().paths).toEqual(["src/**/*.ts", "test/**/*.ts"]);
+    });
+
+    it("should load skill with paths as a comma-separated string", async () => {
+      const skillDir = join(testDir, ".claude", "skills", "paths-string-skill");
+      await ensureDir(skillDir);
+
+      const content = `---
+name: paths-string-skill
+description: Skill scoped to paths
+paths: "src/**/*.ts,test/**/*.ts"
+---
+
+This skill is scoped to matching files.`;
+
+      await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
+
+      const skill = await ClaudecodeSkill.fromDir({
+        outputRoot: testDir,
+        dirName: "paths-string-skill",
+      });
+
+      expect(skill.getFrontmatter().paths).toBe("src/**/*.ts,test/**/*.ts");
     });
 
     it("should load skill with other files", async () => {
@@ -681,7 +1110,7 @@ Main skill content.`;
       );
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "multi-file-skill",
       });
 
@@ -697,7 +1126,7 @@ Main skill content.`;
 
       await expect(
         ClaudecodeSkill.fromDir({
-          baseDir: testDir,
+          outputRoot: testDir,
           dirName: "missing-skill",
         }),
       ).rejects.toThrow("SKILL.md not found");
@@ -718,7 +1147,7 @@ Invalid frontmatter.`;
 
       await expect(
         ClaudecodeSkill.fromDir({
-          baseDir: testDir,
+          outputRoot: testDir,
           dirName: "invalid-skill",
         }),
       ).rejects.toThrow("Invalid frontmatter");
@@ -739,7 +1168,7 @@ Custom path content.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: customPath,
         dirName: "custom-skill",
       });
@@ -761,7 +1190,7 @@ Global skill content.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), content);
 
       const skill = await ClaudecodeSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "global-skill",
         global: true,
       });
@@ -811,14 +1240,25 @@ Global skill content.`;
     });
 
     it("should reject invalid allowed-tools type", () => {
+      // `allowed-tools` accepts a string or a string array (per the Claude Code
+      // skills docs), so a number is the invalid case that must still be rejected.
       const invalidFrontmatter = {
         name: "test-skill",
         description: "Test description",
-        "allowed-tools": "not-an-array",
+        "allowed-tools": 123,
       };
 
       const result = ClaudecodeSkillFrontmatterSchema.safeParse(invalidFrontmatter);
       expect(result.success).toBe(false);
+    });
+
+    it("should accept allowed-tools as a space-separated string", () => {
+      const result = ClaudecodeSkillFrontmatterSchema.safeParse({
+        name: "test-skill",
+        description: "Test description",
+        "allowed-tools": "Read Write Bash",
+      });
+      expect(result.success).toBe(true);
     });
 
     it("should validate frontmatter with model field", () => {
@@ -865,6 +1305,42 @@ Global skill content.`;
       });
       expect(result.success).toBe(false);
     });
+
+    it("should validate frontmatter with paths as string", () => {
+      const result = ClaudecodeSkillFrontmatterSchema.safeParse({
+        name: "test-skill",
+        description: "Test",
+        paths: "src/**/*.ts,test/**/*.ts",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("should validate frontmatter with paths as array", () => {
+      const result = ClaudecodeSkillFrontmatterSchema.safeParse({
+        name: "test-skill",
+        description: "Test",
+        paths: ["src/**/*.ts", "test/**/*.ts"],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("should reject paths with invalid type", () => {
+      const result = ClaudecodeSkillFrontmatterSchema.safeParse({
+        name: "test-skill",
+        description: "Test",
+        paths: 123,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("should reject paths with array containing non-strings", () => {
+      const result = ClaudecodeSkillFrontmatterSchema.safeParse({
+        name: "test-skill",
+        description: "Test",
+        paths: ["src/**/*.ts", 42],
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   describe("round-trip conversion", () => {
@@ -904,6 +1380,44 @@ Global skill content.`;
       const restored = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
 
       expect(restored.getFrontmatter()["disable-model-invocation"]).toBe(false);
+    });
+
+    it("should preserve paths string through round-trip", () => {
+      const originalFrontmatter: ClaudecodeSkillFrontmatter = {
+        name: "round-trip-skill",
+        description: "Round trip test",
+        paths: "src/**/*.ts,test/**/*.ts",
+      };
+
+      const original = new ClaudecodeSkill({
+        dirName: "round-trip-skill",
+        frontmatter: originalFrontmatter,
+        body: "Round trip body",
+      });
+
+      const rulesyncSkill = original.toRulesyncSkill();
+      const restored = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+
+      expect(restored.getFrontmatter().paths).toBe("src/**/*.ts,test/**/*.ts");
+    });
+
+    it("should preserve paths array through round-trip", () => {
+      const originalFrontmatter: ClaudecodeSkillFrontmatter = {
+        name: "round-trip-skill",
+        description: "Round trip test",
+        paths: ["src/**/*.ts", "test/**/*.ts"],
+      };
+
+      const original = new ClaudecodeSkill({
+        dirName: "round-trip-skill",
+        frontmatter: originalFrontmatter,
+        body: "Round trip body",
+      });
+
+      const rulesyncSkill = original.toRulesyncSkill();
+      const restored = ClaudecodeSkill.fromRulesyncSkill({ rulesyncSkill });
+
+      expect(restored.getFrontmatter().paths).toEqual(["src/**/*.ts", "test/**/*.ts"]);
     });
 
     it("should preserve model through ClaudecodeSkill -> RulesyncSkill -> ClaudecodeSkill", () => {

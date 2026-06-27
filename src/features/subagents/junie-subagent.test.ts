@@ -43,6 +43,37 @@ describe("JunieSubagentFrontmatterSchema", () => {
     const invalidName = { name: 123, description: "A test agent" };
     expect(() => JunieSubagentFrontmatterSchema.parse(invalidName)).toThrow();
   });
+
+  it("should accept the full documented field set", () => {
+    const frontmatter = {
+      description: "Review a change and propose a safe patch",
+      name: "code-review-helper",
+      tools: ["Read", "Grep", "Edit"],
+      disallowedTools: ["Bash", "WebSearch"],
+      mcpServers: ["github"],
+      model: "sonnet",
+      reasoningLevel: "high",
+      maxTurns: 20,
+      skills: ["kotlin", "writerside"],
+      allowPromptArgument: true,
+    };
+
+    expect(() => JunieSubagentFrontmatterSchema.parse(frontmatter)).not.toThrow();
+    const result = JunieSubagentFrontmatterSchema.parse(frontmatter);
+    expect(result.tools).toEqual(["Read", "Grep", "Edit"]);
+    expect(result.maxTurns).toBe(20);
+    expect(result.allowPromptArgument).toBe(true);
+    expect(result.reasoningLevel).toBe("high");
+  });
+
+  it("should reject a non-numeric maxTurns and non-boolean allowPromptArgument", () => {
+    expect(() =>
+      JunieSubagentFrontmatterSchema.parse({ description: "x", maxTurns: "twenty" }),
+    ).toThrow();
+    expect(() =>
+      JunieSubagentFrontmatterSchema.parse({ description: "x", allowPromptArgument: "yes" }),
+    ).toThrow();
+  });
 });
 
 describe("JunieSubagent", () => {
@@ -62,13 +93,17 @@ describe("JunieSubagent", () => {
   it("should return settable paths", () => {
     expect(JunieSubagent.getSettablePaths()).toEqual({
       relativeDirPath: join(".junie", "agents"),
+      importDirPaths: [".agents"],
     });
   });
 
-  it("should throw error when global mode is requested in getSettablePaths", () => {
-    expect(() => JunieSubagent.getSettablePaths({ global: true })).toThrow(
-      "JunieSubagent does not support global mode.",
-    );
+  it("should return the same .junie/agents path for global mode", () => {
+    // Junie subagents support global mode (~/.junie/agents/); the relative path is
+    // identical to project mode, only the resolved outputRoot differs.
+    expect(JunieSubagent.getSettablePaths({ global: true })).toEqual({
+      relativeDirPath: join(".junie", "agents"),
+      importDirPaths: [".agents"],
+    });
   });
 
   describe("constructor", () => {
@@ -79,7 +114,7 @@ describe("JunieSubagent", () => {
       };
 
       const subagent = new JunieSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".junie/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -99,7 +134,7 @@ describe("JunieSubagent", () => {
       expect(() => {
         // oxlint-disable-next-line eslint/no-new
         new JunieSubagent({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: ".junie/agents",
           relativeFilePath: "test-agent.md",
           frontmatter: invalidFrontmatter,
@@ -116,7 +151,7 @@ describe("JunieSubagent", () => {
       expect(() => {
         // oxlint-disable-next-line eslint/no-new
         new JunieSubagent({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: ".junie/agents",
           relativeFilePath: "test-agent.md",
           frontmatter: invalidFrontmatter,
@@ -137,7 +172,7 @@ describe("JunieSubagent", () => {
 
       const body = "Agent body content";
       const subagent = new JunieSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".junie/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -170,7 +205,7 @@ describe("JunieSubagent", () => {
 
       const body = "Agent body content";
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -178,7 +213,7 @@ describe("JunieSubagent", () => {
       });
 
       const junieSubagent = JunieSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: JunieSubagent.getSettablePaths().relativeDirPath,
         rulesyncSubagent,
         validate: true,
@@ -190,6 +225,54 @@ describe("JunieSubagent", () => {
       expect(junieSubagent.getBody()).toBe(body);
       expect(junieSubagent.getRelativeDirPath()).toBe(join(".junie", "agents"));
       expect(junieSubagent.getRelativeFilePath()).toBe("test-agent.md");
+    });
+
+    it("round-trips the documented fields through the junie section", () => {
+      const rulesyncFrontmatter: RulesyncSubagentFrontmatter = {
+        targets: ["junie"],
+        name: "code-review-helper",
+        description: "Review a change",
+        junie: {
+          tools: ["Read", "Grep"],
+          disallowedTools: ["Bash"],
+          mcpServers: ["github"],
+          model: "sonnet",
+          reasoningLevel: "high",
+          maxTurns: 20,
+          skills: ["kotlin"],
+          allowPromptArgument: true,
+        },
+      };
+
+      const rulesyncSubagent = new RulesyncSubagent({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
+        relativeFilePath: "code-review-helper.md",
+        frontmatter: rulesyncFrontmatter,
+        body: "body",
+      });
+
+      const junieSubagent = JunieSubagent.fromRulesyncSubagent({
+        outputRoot: testDir,
+        relativeDirPath: JunieSubagent.getSettablePaths().relativeDirPath,
+        rulesyncSubagent,
+        validate: true,
+      }) as JunieSubagent;
+
+      const fm = junieSubagent.getFrontmatter();
+      expect(fm.tools).toEqual(["Read", "Grep"]);
+      expect(fm.mcpServers).toEqual(["github"]);
+      expect(fm.reasoningLevel).toBe("high");
+      expect(fm.maxTurns).toBe(20);
+      expect(fm.allowPromptArgument).toBe(true);
+
+      // Round-trips back into the rulesync junie section.
+      const back = junieSubagent.toRulesyncSubagent().getFrontmatter().junie as Record<
+        string,
+        unknown
+      >;
+      expect(back.tools).toEqual(["Read", "Grep"]);
+      expect(back.maxTurns).toBe(20);
     });
 
     it("should not allow junie section to overwrite top-level name and description", () => {
@@ -206,7 +289,7 @@ describe("JunieSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -214,7 +297,7 @@ describe("JunieSubagent", () => {
       });
 
       const junieSubagent = JunieSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".junie", "agents"),
         rulesyncSubagent,
         validate: true,
@@ -226,7 +309,7 @@ describe("JunieSubagent", () => {
       expect((junieFrontmatter as any).extraField).toBe("value");
     });
 
-    it("should use default baseDir when not provided", () => {
+    it("should use default outputRoot when not provided", () => {
       const rulesyncFrontmatter: RulesyncSubagentFrontmatter = {
         targets: ["junie"],
         name: "test-agent",
@@ -234,7 +317,7 @@ describe("JunieSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -246,7 +329,7 @@ describe("JunieSubagent", () => {
         relativeDirPath: JunieSubagent.getSettablePaths().relativeDirPath,
       });
 
-      expect(junieSubagent.getBaseDir()).toBe(testDir);
+      expect(junieSubagent.getOutputRoot()).toBe(testDir);
     });
   });
 
@@ -301,7 +384,7 @@ describe("JunieSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await JunieSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "file-test-agent.md",
         validate: true,
       });
@@ -311,7 +394,7 @@ describe("JunieSubagent", () => {
       expect(subagent.getBody()).toBe(body);
       expect(subagent.getRelativeFilePath()).toBe("file-test-agent.md");
       expect(subagent.getRelativeDirPath()).toBe(join(".junie", "agents"));
-      expect(subagent.getBaseDir()).toBe(testDir);
+      expect(subagent.getOutputRoot()).toBe(testDir);
     });
 
     it("should throw error for file with missing description", async () => {
@@ -325,7 +408,7 @@ describe("JunieSubagent", () => {
 
       await expect(
         JunieSubagent.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "invalid.md",
           validate: true,
         }),
@@ -347,12 +430,38 @@ describe("JunieSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await JunieSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "trim-agent.md",
         validate: true,
       });
 
       expect(subagent.getBody()).toBe("body content");
+    });
+
+    it("should load subagent from the .agents import root when relativeDirPath is given", async () => {
+      // Junie also discovers subagents from the cross-tool `.agents/` directory.
+      const frontmatter: JunieSubagentFrontmatter = {
+        name: "shared-agent",
+        description: "An agent loaded from the shared .agents directory",
+      };
+
+      const body = "Shared agent body";
+      const fileContent = stringifyFrontmatter(body, frontmatter);
+
+      const filePath = join(testDir, ".agents", "shared-agent.md");
+      await writeFileContent(filePath, fileContent);
+
+      const subagent = await JunieSubagent.fromFile({
+        outputRoot: testDir,
+        relativeDirPath: ".agents",
+        relativeFilePath: "shared-agent.md",
+        validate: true,
+      });
+
+      expect(subagent).toBeInstanceOf(JunieSubagent);
+      expect(subagent.getFrontmatter()).toEqual(frontmatter);
+      expect(subagent.getBody()).toBe(body);
+      expect(subagent.getRelativeDirPath()).toBe(".agents");
     });
   });
 });

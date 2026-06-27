@@ -40,9 +40,9 @@ describe("OpenCodeRule", () => {
       expect(opencodeRule.getFileContent()).toBe("# Test Memory\n\nThis is a test memory.");
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const opencodeRule = new OpenCodeRule({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".opencode/memories",
         relativeFilePath: "custom-memory.md",
         fileContent: "# Custom Memory",
@@ -103,12 +103,12 @@ describe("OpenCodeRule", () => {
 
   describe("fromFile", () => {
     it("should create instance from root AGENTS.md file", async () => {
-      // Setup test file - for root, the file should be directly at baseDir/AGENTS.md
+      // Setup test file - for root, the file should be directly at outputRoot/AGENTS.md
       const testContent = "# OpenCode Project\n\nProject overview and agent instructions.";
       await writeFileContent(join(testDir, "AGENTS.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
       });
 
@@ -127,7 +127,7 @@ describe("OpenCodeRule", () => {
       await writeFileContent(join(memoriesDir, "memory-test.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "memory-test.md",
       });
 
@@ -138,9 +138,9 @@ describe("OpenCodeRule", () => {
       expect(opencodeRule.isRoot()).toBe(false);
     });
 
-    it("should use default baseDir when not provided", async () => {
+    it("should use default outputRoot when not provided", async () => {
       // Setup test file in test directory - process.cwd() is mocked to return testDir
-      const testContent = "# Default BaseDir Test";
+      const testContent = "# Default OutputRoot Test";
       await writeFileContent(join(testDir, "AGENTS.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
@@ -157,13 +157,13 @@ describe("OpenCodeRule", () => {
       await writeFileContent(join(testDir, "AGENTS.md"), testContent);
 
       const opencodeRuleWithValidation = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
         validate: true,
       });
 
       const opencodeRuleWithoutValidation = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
         validate: false,
       });
@@ -175,7 +175,7 @@ describe("OpenCodeRule", () => {
     it("should throw error when file does not exist", async () => {
       await expect(
         OpenCodeRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "nonexistent.md",
         }),
       ).rejects.toThrow();
@@ -189,18 +189,18 @@ describe("OpenCodeRule", () => {
       const rootContent = "# Root Project Overview";
       const memoryContent = "# Memory Rule";
 
-      // Root file goes directly in baseDir
+      // Root file goes directly in outputRoot
       await writeFileContent(join(testDir, "AGENTS.md"), rootContent);
       // Memory file goes in .opencode/memories
       await writeFileContent(join(memoriesDir, "memory.md"), memoryContent);
 
       const rootRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
       });
 
       const memoryRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "memory.md",
       });
 
@@ -264,7 +264,7 @@ describe("OpenCodeRule", () => {
       expect(opencodeRule.isRoot()).toBe(false);
     });
 
-    it("should use custom baseDir", () => {
+    it("should use custom outputRoot", () => {
       const rulesyncRule = new RulesyncRule({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "custom-base.md",
@@ -278,7 +278,7 @@ describe("OpenCodeRule", () => {
       });
 
       const opencodeRule = OpenCodeRule.fromRulesyncRule({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         rulesyncRule,
       });
 
@@ -311,12 +311,136 @@ describe("OpenCodeRule", () => {
       expect(opencodeRuleWithValidation.getFileContent()).toContain("# Validation Test");
       expect(opencodeRuleWithoutValidation.getFileContent()).toContain("# Validation Test");
     });
+
+    it("should handle subprojectPath from agentsmd field", () => {
+      const rulesyncRule = new RulesyncRule({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "test.md",
+        frontmatter: {
+          root: false,
+          targets: ["opencode"],
+          agentsmd: {
+            subprojectPath: "packages/my-app",
+          },
+        },
+        body: "# Subproject OpenCode\n\nContent for subproject.",
+      });
+
+      const opencodeRule = OpenCodeRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+      });
+
+      expect(opencodeRule.getFileContent()).toBe(
+        "# Subproject OpenCode\n\nContent for subproject.",
+      );
+      expect(opencodeRule.getRelativeDirPath()).toBe("packages/my-app");
+      expect(opencodeRule.getRelativeFilePath()).toBe("AGENTS.md");
+    });
+
+    it("should ignore subprojectPath for root rules", () => {
+      const rulesyncRule = new RulesyncRule({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "test.md",
+        frontmatter: {
+          root: true,
+          targets: ["opencode"],
+          agentsmd: {
+            subprojectPath: "packages/my-app", // Should be ignored
+          },
+        },
+        body: "# Root OpenCode\n\nRoot content.",
+      });
+
+      const opencodeRule = OpenCodeRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+      });
+
+      expect(opencodeRule.getFileContent()).toBe("# Root OpenCode\n\nRoot content.");
+      expect(opencodeRule.getRelativeDirPath()).toBe(".");
+      expect(opencodeRule.getRelativeFilePath()).toBe("AGENTS.md");
+    });
+
+    it("should handle empty subprojectPath", () => {
+      const rulesyncRule = new RulesyncRule({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "test.md",
+        frontmatter: {
+          root: false,
+          targets: ["opencode"],
+          agentsmd: {
+            subprojectPath: "",
+          },
+        },
+        body: "# Empty Subproject OpenCode\n\nContent.",
+      });
+
+      const opencodeRule = OpenCodeRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+      });
+
+      expect(opencodeRule.getFileContent()).toBe("# Empty Subproject OpenCode\n\nContent.");
+      expect(opencodeRule.getRelativeDirPath()).toBe(".opencode/memories");
+      expect(opencodeRule.getRelativeFilePath()).toBe("test.md");
+    });
+
+    it("should handle complex nested subprojectPath", () => {
+      const rulesyncRule = new RulesyncRule({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "nested.md",
+        frontmatter: {
+          root: false,
+          targets: ["opencode"],
+          agentsmd: {
+            subprojectPath: "packages/apps/my-app/src",
+          },
+        },
+        body: "# Nested Subproject OpenCode\n\nDeeply nested content.",
+      });
+
+      const opencodeRule = OpenCodeRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+      });
+
+      expect(opencodeRule.getFileContent()).toBe(
+        "# Nested Subproject OpenCode\n\nDeeply nested content.",
+      );
+      expect(opencodeRule.getRelativeDirPath()).toBe("packages/apps/my-app/src");
+      expect(opencodeRule.getRelativeFilePath()).toBe("AGENTS.md");
+    });
+
+    it("should handle undefined agentsmd field", () => {
+      const rulesyncRule = new RulesyncRule({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "test.md",
+        frontmatter: {
+          root: false,
+          targets: ["opencode"],
+        },
+        body: "# No agentsmd\n\nContent without agentsmd.",
+      });
+
+      const opencodeRule = OpenCodeRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+      });
+
+      expect(opencodeRule.getFileContent()).toBe("# No agentsmd\n\nContent without agentsmd.");
+    });
   });
 
   describe("toRulesyncRule", () => {
     it("should convert OpenCodeRule to RulesyncRule for root rule", () => {
       const opencodeRule = new OpenCodeRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: "AGENTS.md",
         fileContent: "# Convert Test\n\nThis will be converted.",
@@ -333,7 +457,7 @@ describe("OpenCodeRule", () => {
 
     it("should convert OpenCodeRule to RulesyncRule for memory rule", () => {
       const opencodeRule = new OpenCodeRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".opencode/memories",
         relativeFilePath: "memory-convert.md",
         fileContent: "# Memory Convert Test\n\nThis memory will be converted.",
@@ -352,7 +476,7 @@ describe("OpenCodeRule", () => {
 
     it("should preserve metadata in conversion", () => {
       const opencodeRule = new OpenCodeRule({
-        baseDir: "/test/path",
+        outputRoot: "/test/path",
         relativeDirPath: ".",
         relativeFilePath: "AGENTS.md",
         fileContent: "# Metadata Test\n\nWith metadata preserved.",
@@ -430,7 +554,7 @@ describe("OpenCodeRule", () => {
 
       // Load from file
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
       });
 
@@ -452,7 +576,7 @@ describe("OpenCodeRule", () => {
 
       // Load from file
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "memory-integration.md",
       });
 
@@ -470,7 +594,7 @@ describe("OpenCodeRule", () => {
 
       // Start with rulesync rule (root)
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "roundtrip.md",
         frontmatter: {
@@ -484,7 +608,7 @@ describe("OpenCodeRule", () => {
 
       // Convert to opencode rule
       const opencodeRule = OpenCodeRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 
@@ -501,7 +625,7 @@ describe("OpenCodeRule", () => {
 
       // Start with rulesync rule (non-root)
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "detail-roundtrip.md",
         frontmatter: {
@@ -515,7 +639,7 @@ describe("OpenCodeRule", () => {
 
       // Convert to opencode rule
       const opencodeRule = OpenCodeRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 
@@ -537,7 +661,7 @@ describe("OpenCodeRule", () => {
       // This should work with the current implementation since fromFile
       // determines path based on the relativeFilePath parameter
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "nested/nested-rule.md",
       });
 
@@ -658,7 +782,7 @@ describe("OpenCodeRule", () => {
       await writeFileContent(join(globalDir, "AGENTS.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
         global: true,
       });
@@ -676,7 +800,7 @@ describe("OpenCodeRule", () => {
       await writeFileContent(join(globalDir, "AGENTS.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
         global: true,
       });
@@ -691,7 +815,7 @@ describe("OpenCodeRule", () => {
       await writeFileContent(join(testDir, "AGENTS.md"), testContent);
 
       const opencodeRule = await OpenCodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "AGENTS.md",
         global: false,
       });
@@ -750,7 +874,7 @@ describe("OpenCodeRule", () => {
   describe("isTargetedByRulesyncRule", () => {
     it("should return true for rules targeting opencode", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -764,7 +888,7 @@ describe("OpenCodeRule", () => {
 
     it("should return true for rules targeting all tools (*)", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -778,7 +902,7 @@ describe("OpenCodeRule", () => {
 
     it("should return false for rules not targeting opencode", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -792,7 +916,7 @@ describe("OpenCodeRule", () => {
 
     it("should return false for empty targets", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -806,7 +930,7 @@ describe("OpenCodeRule", () => {
 
     it("should handle mixed targets including opencode", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -820,7 +944,7 @@ describe("OpenCodeRule", () => {
 
     it("should handle undefined targets in frontmatter", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {},

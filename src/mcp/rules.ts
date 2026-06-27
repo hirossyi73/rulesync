@@ -17,7 +17,9 @@ import {
   removeFile,
   writeFileContent,
 } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
+import { ConsoleLogger } from "../utils/logger.js";
+
+const logger = new ConsoleLogger({ verbose: false, silent: true });
 
 const maxRuleSizeBytes = 1024 * 1024; // 1MB
 const maxRulesCount = 1000;
@@ -148,7 +150,7 @@ async function putRule({
 
     // Create a new RulesyncRule instance
     const rule = new RulesyncRule({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
       relativeFilePath: filename,
       frontmatter,
@@ -205,7 +207,7 @@ async function deleteRule({ relativePathFromCwd }: { relativePathFromCwd: string
 /**
  * Schema for rule-related tool parameters
  */
-export const ruleToolSchemas = {
+const ruleToolSchemas = {
   listRules: z.object({}),
   getRule: z.object({
     relativePathFromCwd: z.string(),

@@ -17,7 +17,9 @@ import {
   writeFileContent,
 } from "../utils/file.js";
 import { stringifyFrontmatter } from "../utils/frontmatter.js";
-import { logger } from "../utils/logger.js";
+import { ConsoleLogger } from "../utils/logger.js";
+
+const logger = new ConsoleLogger({ verbose: false, silent: true });
 
 const maxCommandSizeBytes = 1024 * 1024; // 1MB
 const maxCommandsCount = 1000;
@@ -152,7 +154,7 @@ async function putCommand({
     // Create a new RulesyncCommand instance
     const fileContent = stringifyFrontmatter(body, frontmatter);
     const command = new RulesyncCommand({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
       relativeFilePath: filename,
       frontmatter,
@@ -210,7 +212,7 @@ async function deleteCommand({ relativePathFromCwd }: { relativePathFromCwd: str
 /**
  * Schema for command-related tool parameters
  */
-export const commandToolSchemas = {
+const commandToolSchemas = {
   listCommands: z.object({}),
   getCommand: z.object({
     relativePathFromCwd: z.string(),

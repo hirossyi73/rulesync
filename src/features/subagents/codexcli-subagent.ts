@@ -3,6 +3,7 @@ import { join } from "node:path";
 import * as smolToml from "smol-toml";
 import { z } from "zod/mini";
 
+import { CODEXCLI_AGENTS_DIR_PATH } from "../../constants/codexcli-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
@@ -25,6 +26,23 @@ export const CodexCliSubagentTomlSchema = z.looseObject({
 });
 
 type CodexCliSubagentToml = z.infer<typeof CodexCliSubagentTomlSchema>;
+
+function stringifyCodexCliSubagentToml(tomlObj: CodexCliSubagentToml): string {
+  const { developer_instructions, ...restFields } = tomlObj;
+  const restToml = smolToml.stringify(restFields).trimEnd();
+
+  if (developer_instructions === undefined) {
+    return restToml;
+  }
+
+  const developerInstructionsToml = developer_instructions.includes("\n")
+    ? developer_instructions.includes("'''")
+      ? smolToml.stringify({ developer_instructions }).trimEnd()
+      : `developer_instructions = '''\n${developer_instructions}\n'''`
+    : smolToml.stringify({ developer_instructions }).trimEnd();
+
+  return [restToml, developerInstructionsToml].filter((value) => value.length > 0).join("\n");
+}
 
 export type CodexCliSubagentParams = {
   body: string;
@@ -57,7 +75,7 @@ export class CodexCliSubagent extends ToolSubagent {
 
   static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
     return {
-      relativeDirPath: join(".codex", "agents"),
+      relativeDirPath: CODEXCLI_AGENTS_DIR_PATH,
     };
   }
 
@@ -77,9 +95,19 @@ export class CodexCliSubagent extends ToolSubagent {
         { cause: error },
       );
     }
-    const { name, description, developer_instructions, ...restFields } = parsed;
+    const {
+      name,
+      description,
+      developer_instructions,
+      // `short-description` is a field Codex rejects, so it is excluded on the
+      // generation side; drop it here too so import/export stay symmetric and a
+      // stray value never round-trips into the rulesync `codexcli` section.
+      "short-description": _shortDescription,
+      ...restFields
+    } = parsed;
 
-    // Build codexcli section with all fields except name, description, and developer_instructions
+    // Build codexcli section with all fields except name, description,
+    // developer_instructions, and short-description.
     const codexcliSection: Record<string, unknown> = {
       ...restFields,
     };
@@ -93,7 +121,7 @@ export class CodexCliSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".",
+      outputRoot: ".",
       frontmatter: rulesyncFrontmatter,
       body: developer_instructions ?? "",
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
@@ -103,7 +131,7 @@ export class CodexCliSubagent extends ToolSubagent {
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -114,6 +142,7 @@ export class CodexCliSubagent extends ToolSubagent {
       "name",
       "description",
       "developer_instructions",
+      "short-description",
     ]);
 
     // Build TOML object from rulesync frontmatter + codexcli section (tool-specific fields only)
@@ -124,12 +153,12 @@ export class CodexCliSubagent extends ToolSubagent {
       ...codexcliSection,
     };
 
-    const body = smolToml.stringify(tomlObj);
+    const body = stringifyCodexCliSubagentToml(tomlObj);
     const paths = this.getSettablePaths({ global });
     const relativeFilePath = rulesyncSubagent.getRelativeFilePath().replace(/\.md$/, ".toml");
 
     return new CodexCliSubagent({
-      baseDir,
+      outputRoot,
       body,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
@@ -160,17 +189,17 @@ export class CodexCliSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<CodexCliSubagent> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
 
     const subagent = new CodexCliSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       body: fileContent.trim(),
@@ -192,12 +221,12 @@ export class CodexCliSubagent extends ToolSubagent {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): CodexCliSubagent {
     return new CodexCliSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       body: "",

@@ -105,6 +105,118 @@ describe("rulesyncTool", () => {
     ).rejects.toThrow();
   });
 
+  it("supports permissions content operations", async () => {
+    const rulesyncDir = join(testDir, ".rulesync");
+    await ensureDir(rulesyncDir);
+
+    const content = JSON.stringify({
+      permission: {
+        bash: {
+          "git *": "allow",
+          "rm *": "deny",
+        },
+      },
+    });
+
+    const putResult = await rulesyncTool.execute({
+      feature: "permissions",
+      operation: "put",
+      content,
+    });
+
+    const putParsed = JSON.parse(putResult);
+    expect(putParsed.relativePathFromCwd).toBe(".rulesync/permissions.json");
+    expect(putParsed.content).toContain("git *");
+
+    const getResult = await rulesyncTool.execute({
+      feature: "permissions",
+      operation: "get",
+    });
+
+    const getParsed = JSON.parse(getResult);
+    expect(getParsed.content).toContain("git *");
+    expect(getParsed.content).toContain("rm *");
+
+    const deleteResult = await rulesyncTool.execute({
+      feature: "permissions",
+      operation: "delete",
+    });
+
+    const deleteParsed = JSON.parse(deleteResult);
+    expect(deleteParsed.relativePathFromCwd).toBe(".rulesync/permissions.json");
+
+    // Verify the file is deleted by checking get throws
+    await expect(
+      rulesyncTool.execute({
+        feature: "permissions",
+        operation: "get",
+      }),
+    ).rejects.toThrow();
+
+    // put without content should throw the correct error
+    await expect(
+      rulesyncTool.execute({
+        feature: "permissions",
+        operation: "put",
+      }),
+    ).rejects.toThrow("content is required for permissions put operation");
+  });
+
+  it("supports hooks content operations", async () => {
+    const rulesyncDir = join(testDir, ".rulesync");
+    await ensureDir(rulesyncDir);
+
+    const content = JSON.stringify({
+      hooks: {
+        preToolUse: [{ command: "echo pre" }],
+        sessionStart: [{ command: "echo start" }],
+      },
+    });
+
+    const putResult = await rulesyncTool.execute({
+      feature: "hooks",
+      operation: "put",
+      content,
+    });
+
+    const putParsed = JSON.parse(putResult);
+    expect(putParsed.relativePathFromCwd).toBe(".rulesync/hooks.json");
+    expect(putParsed.content).toContain("echo pre");
+
+    const getResult = await rulesyncTool.execute({
+      feature: "hooks",
+      operation: "get",
+    });
+
+    const getParsed = JSON.parse(getResult);
+    expect(getParsed.content).toContain("echo pre");
+    expect(getParsed.content).toContain("echo start");
+
+    const deleteResult = await rulesyncTool.execute({
+      feature: "hooks",
+      operation: "delete",
+    });
+
+    const deleteParsed = JSON.parse(deleteResult);
+    expect(deleteParsed.relativePathFromCwd).toBe(".rulesync/hooks.json");
+
+    // Verify the file is deleted by checking get throws
+    await expect(
+      rulesyncTool.execute({
+        feature: "hooks",
+        operation: "get",
+      }),
+    ).rejects.toThrow();
+
+    // put without content should throw the correct error
+    await expect(
+      rulesyncTool.execute({
+        feature: "hooks",
+        operation: "put",
+      }),
+    ).rejects.toThrow("content is required for hooks put operation");
+  });
+
   it("handles ignore file lifecycle through a single tool", async () => {
     const rulesyncDir = join(testDir, ".rulesync");
     await ensureDir(rulesyncDir);
@@ -491,6 +603,105 @@ This is a test rule file.
       await expect(
         rulesyncTool.execute({
           feature: "import",
+          operation: "delete",
+        }),
+      ).rejects.toThrow(/supported operations/i);
+    });
+  });
+
+  describe("convert feature", () => {
+    it("should execute convert with run operation", async () => {
+      // Create CLAUDE.md file to convert from
+      await writeFileContent(
+        join(testDir, "CLAUDE.md"),
+        `# Claude Code Rules
+
+This is a test rule file.
+`,
+      );
+
+      const result = await rulesyncTool.execute({
+        feature: "convert",
+        operation: "run",
+        convertOptions: {
+          from: "claudecode",
+          to: ["cursor"],
+          features: ["rules"],
+        },
+      });
+
+      const parsed = JSON.parse(result);
+      expect(parsed.success).toBe(true);
+      expect(parsed.result).toBeDefined();
+      expect(parsed.config).toBeDefined();
+      expect(parsed.config.from).toBe("claudecode");
+      expect(parsed.config.to).toEqual(["cursor"]);
+    });
+
+    it("should return error when convertOptions is not provided", async () => {
+      await expect(
+        rulesyncTool.execute({
+          feature: "convert",
+          operation: "run",
+        }),
+      ).rejects.toThrow("convertOptions is required for convert feature");
+    });
+
+    it("should return error when from is empty", async () => {
+      const result = await rulesyncTool.execute({
+        feature: "convert",
+        operation: "run",
+        convertOptions: {
+          from: "",
+          to: ["cursor"],
+        },
+      });
+
+      const parsed = JSON.parse(result);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error).toContain("from is required");
+    });
+
+    it("should return error when to is empty", async () => {
+      const result = await rulesyncTool.execute({
+        feature: "convert",
+        operation: "run",
+        convertOptions: {
+          from: "claudecode",
+          to: [],
+        },
+      });
+
+      const parsed = JSON.parse(result);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error).toContain("to is required");
+    });
+
+    it("should reject unsupported operations for convert feature", async () => {
+      await expect(
+        rulesyncTool.execute({
+          feature: "convert",
+          operation: "list",
+        }),
+      ).rejects.toThrow(/supported operations/i);
+
+      await expect(
+        rulesyncTool.execute({
+          feature: "convert",
+          operation: "get",
+        }),
+      ).rejects.toThrow(/supported operations/i);
+
+      await expect(
+        rulesyncTool.execute({
+          feature: "convert",
+          operation: "put",
+        }),
+      ).rejects.toThrow(/supported operations/i);
+
+      await expect(
+        rulesyncTool.execute({
+          feature: "convert",
           operation: "delete",
         }),
       ).rejects.toThrow(/supported operations/i);

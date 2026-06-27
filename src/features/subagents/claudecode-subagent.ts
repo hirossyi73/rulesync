@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { CLAUDECODE_AGENTS_DIR_PATH } from "../../constants/claudecode-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
@@ -22,8 +23,19 @@ export const ClaudecodeSubagentFrontmatterSchema = z.looseObject({
   description: z.optional(z.string()),
   model: z.optional(z.string()),
   tools: z.optional(z.union([z.string(), z.array(z.string())])),
+  disallowedTools: z.optional(z.union([z.string(), z.array(z.string())])),
   permissionMode: z.optional(z.string()),
+  maxTurns: z.optional(z.number()),
   skills: z.optional(z.union([z.string(), z.array(z.string())])),
+  color: z.optional(z.string()),
+  memory: z.optional(z.string()),
+  effort: z.optional(z.string()),
+  isolation: z.optional(z.string()),
+  background: z.optional(z.boolean()),
+  initialPrompt: z.optional(z.string()),
+  // Nested config objects are accepted loosely for now; dedicated schemas are a follow-up.
+  mcpServers: z.optional(z.unknown()),
+  hooks: z.optional(z.unknown()),
 });
 
 export type ClaudecodeSubagentFrontmatter = z.infer<typeof ClaudecodeSubagentFrontmatterSchema>;
@@ -58,7 +70,7 @@ export class ClaudecodeSubagent extends ToolSubagent {
 
   static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
     return {
-      relativeDirPath: join(".claude", "agents"),
+      relativeDirPath: CLAUDECODE_AGENTS_DIR_PATH,
     };
   }
 
@@ -88,7 +100,7 @@ export class ClaudecodeSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".", // RulesyncCommand baseDir is always the project root directory
+      outputRoot: ".", // RulesyncCommand outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
@@ -98,7 +110,7 @@ export class ClaudecodeSubagent extends ToolSubagent {
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -133,7 +145,7 @@ export class ClaudecodeSubagent extends ToolSubagent {
     const paths = this.getSettablePaths({ global });
 
     return new ClaudecodeSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: claudecodeFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
@@ -170,13 +182,13 @@ export class ClaudecodeSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<ClaudecodeSubagent> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     // Read file content
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
@@ -188,7 +200,7 @@ export class ClaudecodeSubagent extends ToolSubagent {
     }
 
     return new ClaudecodeSubagent({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: relativeFilePath,
       frontmatter: result.data,
@@ -199,12 +211,12 @@ export class ClaudecodeSubagent extends ToolSubagent {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): ClaudecodeSubagent {
     return new ClaudecodeSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { name: "", description: "" },

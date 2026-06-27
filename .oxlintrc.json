@@ -11,10 +11,12 @@
   },
 
   "rules": {
+    "complexity": ["error", { "max": 20 }],
     "eqeqeq": "error",
     "import/no-cycle": "error",
     "no-console": "error",
     "no-new": "off",
+    "no-underscore-dangle": "off",
     "typescript/no-explicit-any": "warn",
     "unicorn/prefer-node-protocol": "error",
     "unicorn/no-array-reduce": "off"
@@ -34,6 +36,18 @@
       "rules": {
         "typescript/no-explicit-any": "off",
         "no-console": "error"
+      }
+    },
+    {
+      "files": ["src/utils/logger.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["src/cli/index.ts"],
+      "rules": {
+        "no-console": "off"
       }
     }
   ]

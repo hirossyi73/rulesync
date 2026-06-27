@@ -2,7 +2,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import {
+  RULESYNC_MCP_SCHEMA_URL,
+  RULESYNC_RELATIVE_DIR_PATH,
+} from "../../constants/rulesync-paths.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { type ValidationResult } from "../../types/ai-file.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
@@ -51,7 +54,31 @@ describe("CursorMcp", () => {
       expect(exported.mcpServers["test-server"].env.DEBUG).toBe("true");
     });
 
-    it("should convert canonical env format ${VAR} to Cursor ${env:VAR} when exporting (fromRulesyncMcp)", () => {
+    it("should convert multiple Cursor env vars embedded in a single string (toRulesyncMcp)", () => {
+      const cursorConfig = {
+        mcpServers: {
+          "test-server": {
+            command: "node",
+            env: {
+              URL: "https://${env:HOST}:${env:PORT}/api",
+            },
+          },
+        },
+      };
+
+      const cursorMcp = new CursorMcp({
+        relativeDirPath: ".cursor",
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify(cursorConfig),
+      });
+
+      const rulesyncMcp = cursorMcp.toRulesyncMcp();
+      const exported = JSON.parse(rulesyncMcp.getFileContent());
+
+      expect(exported.mcpServers["test-server"].env.URL).toBe("https://${HOST}:${PORT}/api");
+    });
+
+    it("should convert canonical env format ${VAR} to Cursor ${env:VAR} when exporting (fromRulesyncMcp)", async () => {
       const rulesyncConfig = {
         mcpServers: {
           "test-server": {
@@ -71,7 +98,7 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(rulesyncConfig),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: false,
       });
@@ -83,34 +110,7 @@ describe("CursorMcp", () => {
       expect(exported.mcpServers["test-server"]?.env?.DEBUG).toBe("true");
     });
 
-    it("should handle multiple env variables embedded in strings", () => {
-      const cursorConfig = {
-        mcpServers: {
-          "test-server": {
-            command: "node",
-            args: ["server.js"],
-            env: {
-              URL: "https://${env:HOST}:${env:PORT}/api",
-              LITERAL: "localhost",
-            },
-          },
-        },
-      };
-
-      const cursorMcp = new CursorMcp({
-        relativeDirPath: ".cursor",
-        relativeFilePath: "mcp.json",
-        fileContent: JSON.stringify(cursorConfig),
-      });
-
-      const rulesyncMcp = cursorMcp.toRulesyncMcp();
-      const exported = JSON.parse(rulesyncMcp.getFileContent());
-
-      expect(exported.mcpServers["test-server"].env.URL).toBe("https://${HOST}:${PORT}/api");
-      expect(exported.mcpServers["test-server"].env.LITERAL).toBe("localhost");
-    });
-
-    it("should preserve env variable values through round-trip conversion", () => {
+    it("should preserve env variable values through round-trip conversion", async () => {
       const originalConfig = {
         mcpServers: {
           "test-server": {
@@ -133,7 +133,7 @@ describe("CursorMcp", () => {
       });
 
       // Convert to Cursor format
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp: rulesyncMcp1,
         validate: false,
       });
@@ -147,12 +147,16 @@ describe("CursorMcp", () => {
       );
     });
 
-    it("should handle server without env field", () => {
+    it("should convert env vars in headers when exporting (fromRulesyncMcp)", async () => {
       const rulesyncConfig = {
         mcpServers: {
-          "no-env-server": {
-            command: "node",
-            args: ["server.js"],
+          "remote-server": {
+            type: "sse",
+            url: "https://example.com/api/mcp",
+            headers: {
+              Authorization: "Bearer ${API_KEY}",
+              "X-Static": "plain-value",
+            },
           },
         },
       };
@@ -163,15 +167,45 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(rulesyncConfig),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: false,
       });
       const exported = cursorMcp.getJson() as {
-        mcpServers: Record<string, { env?: Record<string, string> }>;
+        mcpServers: Record<string, { headers?: Record<string, string> }>;
       };
 
-      expect(exported.mcpServers["no-env-server"]?.env).toBeUndefined();
+      expect(exported.mcpServers["remote-server"]?.headers?.Authorization).toBe(
+        "Bearer ${env:API_KEY}",
+      );
+      expect(exported.mcpServers["remote-server"]?.headers?.["X-Static"]).toBe("plain-value");
+    });
+
+    it("should convert env vars in headers when importing (toRulesyncMcp)", () => {
+      const cursorConfig = {
+        mcpServers: {
+          "remote-server": {
+            type: "sse",
+            url: "https://example.com/api/mcp",
+            headers: {
+              Authorization: "Bearer ${env:API_KEY}",
+              "X-Static": "plain-value",
+            },
+          },
+        },
+      };
+
+      const cursorMcp = new CursorMcp({
+        relativeDirPath: ".cursor",
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify(cursorConfig),
+      });
+
+      const rulesyncMcp = cursorMcp.toRulesyncMcp();
+      const exported = JSON.parse(rulesyncMcp.getFileContent());
+
+      expect(exported.mcpServers["remote-server"].headers.Authorization).toBe("Bearer ${API_KEY}");
+      expect(exported.mcpServers["remote-server"].headers["X-Static"]).toBe("plain-value");
     });
   });
 
@@ -183,6 +217,20 @@ describe("CursorMcp", () => {
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
       });
+    });
+
+    it("should return correct paths for local mode", () => {
+      const paths = CursorMcp.getSettablePaths({ global: false });
+
+      expect(paths.relativeDirPath).toBe(".cursor");
+      expect(paths.relativeFilePath).toBe("mcp.json");
+    });
+
+    it("should return correct paths for global mode", () => {
+      const paths = CursorMcp.getSettablePaths({ global: true });
+
+      expect(paths.relativeDirPath).toBe(".cursor");
+      expect(paths.relativeFilePath).toBe("mcp.json");
     });
 
     it("should return consistent paths across multiple calls", () => {
@@ -217,20 +265,20 @@ describe("CursorMcp", () => {
       expect(cursorMcp.getFileContent()).toBe(validJsonContent);
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const validJsonContent = JSON.stringify({
         mcpServers: {},
       });
 
       const cursorMcp = new CursorMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
         fileContent: validJsonContent,
       });
 
       expect(cursorMcp.getFilePath()).toBe("/custom/path/.cursor/mcp.json");
-      expect(cursorMcp.getBaseDir()).toBe("/custom/path");
+      expect(cursorMcp.getOutputRoot()).toBe("/custom/path");
     });
 
     it("should parse JSON content correctly", () => {
@@ -350,7 +398,7 @@ describe("CursorMcp", () => {
           relativeFilePath: "mcp.json",
           fileContent: invalidJsonContent,
         });
-      }).toThrow(SyntaxError);
+      }).toThrow("Failed to parse Cursor MCP config at .cursor/mcp.json");
     });
 
     it("should throw error for malformed JSON", () => {
@@ -362,7 +410,7 @@ describe("CursorMcp", () => {
           relativeFilePath: "mcp.json",
           fileContent: malformedJsonContent,
         });
-      }).toThrow(SyntaxError);
+      }).toThrow("Failed to parse Cursor MCP config at .cursor/mcp.json");
     });
 
     it("should handle non-object JSON content", () => {
@@ -448,6 +496,29 @@ describe("CursorMcp", () => {
           validate: true,
         });
       }).toThrow("Validation failed");
+    });
+  });
+
+  describe("isDeletable", () => {
+    it("should return true in local mode", () => {
+      const cursorMcp = new CursorMcp({
+        relativeDirPath: ".cursor",
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify({ mcpServers: {} }),
+      });
+
+      expect(cursorMcp.isDeletable()).toBe(true);
+    });
+
+    it("should return false in global mode", () => {
+      const cursorMcp = new CursorMcp({
+        relativeDirPath: ".cursor",
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify({ mcpServers: {} }),
+        global: true,
+      });
+
+      expect(cursorMcp.isDeletable()).toBe(false);
     });
   });
 
@@ -605,7 +676,7 @@ describe("CursorMcp", () => {
 
       expect(cursorMcp).toBeInstanceOf(CursorMcp);
       expect(cursorMcp.getJson()).toEqual(jsonData);
-      expect(cursorMcp.getBaseDir()).toBe(testDir);
+      expect(cursorMcp.getOutputRoot()).toBe(testDir);
       expect(cursorMcp.getRelativeDirPath()).toBe(".cursor");
       expect(cursorMcp.getRelativeFilePath()).toBe("mcp.json");
     });
@@ -683,7 +754,7 @@ describe("CursorMcp", () => {
       expect(cursorMcp.getJson()).toEqual(complexMcpData);
     });
 
-    it("should use custom baseDir when provided", async () => {
+    it("should use custom outputRoot when provided", async () => {
       const mcpJsonPath = join(testDir, ".cursor", "mcp.json");
       const jsonData = {
         mcpServers: {
@@ -697,16 +768,19 @@ describe("CursorMcp", () => {
       await ensureDir(join(testDir, ".cursor"));
       await writeFileContent(mcpJsonPath, JSON.stringify(jsonData));
 
-      const cursorMcp = await CursorMcp.fromFile({ baseDir: testDir, validate: true });
+      const cursorMcp = await CursorMcp.fromFile({ outputRoot: testDir, validate: true });
 
       expect(cursorMcp).toBeInstanceOf(CursorMcp);
       expect(cursorMcp.getJson()).toEqual(jsonData);
-      expect(cursorMcp.getBaseDir()).toBe(testDir);
+      expect(cursorMcp.getOutputRoot()).toBe(testDir);
       expect(cursorMcp.getFilePath()).toBe(join(testDir, ".cursor", "mcp.json"));
     });
 
-    it("should throw error if file does not exist", async () => {
-      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow();
+    it("should initialize empty config when file does not exist", async () => {
+      const cursorMcp = await CursorMcp.fromFile({ validate: true });
+
+      expect(cursorMcp).toBeInstanceOf(CursorMcp);
+      expect(cursorMcp.getJson()).toEqual({ mcpServers: {} });
     });
 
     it("should throw error for invalid JSON in file", async () => {
@@ -716,7 +790,9 @@ describe("CursorMcp", () => {
       await ensureDir(join(testDir, ".cursor"));
       await writeFileContent(mcpJsonPath, invalidJson);
 
-      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(SyntaxError);
+      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(
+        "Failed to parse Cursor MCP config at .cursor/mcp.json",
+      );
     });
 
     it("should handle empty file", async () => {
@@ -725,7 +801,9 @@ describe("CursorMcp", () => {
       await ensureDir(join(testDir, ".cursor"));
       await writeFileContent(mcpJsonPath, "");
 
-      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(SyntaxError);
+      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(
+        "Failed to parse Cursor MCP config at .cursor/mcp.json",
+      );
     });
 
     it("should handle file with only whitespace", async () => {
@@ -734,12 +812,95 @@ describe("CursorMcp", () => {
       await ensureDir(join(testDir, ".cursor"));
       await writeFileContent(mcpJsonPath, "   \n\t  \n  ");
 
-      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(SyntaxError);
+      await expect(CursorMcp.fromFile({ validate: true })).rejects.toThrow(
+        "Failed to parse Cursor MCP config at .cursor/mcp.json",
+      );
+    });
+
+    it("should create CursorMcp from file in global mode", async () => {
+      const homeDir = testDir;
+      const mcpJsonPath = join(homeDir, ".cursor", "mcp.json");
+      const jsonData = {
+        mcpServers: {
+          "global-server": {
+            command: "node",
+            args: ["global-server.js"],
+          },
+        },
+      };
+
+      await ensureDir(join(homeDir, ".cursor"));
+      await writeFileContent(mcpJsonPath, JSON.stringify(jsonData, null, 2));
+
+      const cursorMcp = await CursorMcp.fromFile({
+        outputRoot: homeDir,
+        validate: true,
+        global: true,
+      });
+
+      expect(cursorMcp).toBeInstanceOf(CursorMcp);
+      expect(cursorMcp.getJson()).toEqual(jsonData);
+      expect(cursorMcp.getRelativeDirPath()).toBe(".cursor");
+      expect(cursorMcp.getRelativeFilePath()).toBe("mcp.json");
+      expect(cursorMcp.getFilePath()).toBe(join(homeDir, ".cursor", "mcp.json"));
+    });
+
+    it("should initialize global config file if it does not exist", async () => {
+      const homeDir = testDir;
+
+      const cursorMcp = await CursorMcp.fromFile({
+        outputRoot: homeDir,
+        validate: true,
+        global: true,
+      });
+
+      expect(cursorMcp).toBeInstanceOf(CursorMcp);
+      expect(cursorMcp.getJson()).toEqual({ mcpServers: {} });
+      expect(cursorMcp.getFilePath()).toBe(join(homeDir, ".cursor", "mcp.json"));
+    });
+
+    it("should preserve non-mcpServers properties in global mode", async () => {
+      const existingGlobalConfig = {
+        mcpServers: {
+          "old-server": {
+            command: "node",
+            args: ["old-server.js"],
+          },
+        },
+        userSettings: {
+          theme: "dark",
+          fontSize: 14,
+        },
+        version: "1.0.0",
+      };
+      await ensureDir(join(testDir, ".cursor"));
+      await writeFileContent(
+        join(testDir, ".cursor", "mcp.json"),
+        JSON.stringify(existingGlobalConfig, null, 2),
+      );
+
+      const cursorMcp = await CursorMcp.fromFile({
+        outputRoot: testDir,
+        global: true,
+      });
+
+      const json = cursorMcp.getJson();
+      expect(json.mcpServers).toEqual({
+        "old-server": {
+          command: "node",
+          args: ["old-server.js"],
+        },
+      });
+      expect((json as any).userSettings).toEqual({
+        theme: "dark",
+        fontSize: 14,
+      });
+      expect((json as any).version).toBe("1.0.0");
     });
   });
 
   describe("fromRulesyncMcp", () => {
-    it("should create CursorMcp from RulesyncMcp with basic config", () => {
+    it("should create CursorMcp from RulesyncMcp with basic config", async () => {
       const rulesyncMcpData = {
         mcpServers: {
           "test-server": {
@@ -755,7 +916,7 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(rulesyncMcpData),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: true,
       });
@@ -764,19 +925,19 @@ describe("CursorMcp", () => {
       expect(cursorMcp.getJson()).toEqual({
         mcpServers: rulesyncMcpData.mcpServers,
       });
-      expect(cursorMcp.getBaseDir()).toBe(testDir);
+      expect(cursorMcp.getOutputRoot()).toBe(testDir);
       expect(cursorMcp.getRelativeDirPath()).toBe(".cursor");
       expect(cursorMcp.getRelativeFilePath()).toBe("mcp.json");
     });
 
-    it("should handle empty RulesyncMcp", () => {
+    it("should handle empty RulesyncMcp", async () => {
       const rulesyncMcp = new RulesyncMcp({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify({}),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: true,
       });
@@ -786,7 +947,7 @@ describe("CursorMcp", () => {
       });
     });
 
-    it("should handle RulesyncMcp with complex configuration", () => {
+    it("should handle RulesyncMcp with complex configuration", async () => {
       const rulesyncMcpData = {
         mcpServers: {
           "complex-server": {
@@ -819,17 +980,36 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(rulesyncMcpData),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: true,
       });
 
-      expect(cursorMcp.getJson()).toEqual({
-        mcpServers: rulesyncMcpData.mcpServers,
+      // `targets` is a rulesync-only field and is stripped from non-codex
+      // tool outputs by `RulesyncMcp.getMcpServers()`. The cursor output
+      // must contain everything else but not `targets`.
+      const json = cursorMcp.getJson() as any;
+      expect(json.mcpServers["complex-server"]).toEqual({
+        command: "node",
+        args: ["complex-server.js", "--port", "3000"],
+        env: {
+          NODE_ENV: "production",
+          DEBUG: "mcp:*",
+        },
       });
+      expect(json.mcpServers["python-server"]).toEqual({
+        command: "python",
+        args: ["python-server.py"],
+        env: {
+          PYTHONPATH: "/usr/local/lib/python3.9/site-packages",
+        },
+      });
+      // `targets` should be stripped.
+      expect(json.mcpServers["complex-server"].targets).toBeUndefined();
+      expect(json.mcpServers["python-server"].targets).toBeUndefined();
     });
 
-    it("should use custom baseDir when provided", () => {
+    it("should use custom outputRoot when provided", async () => {
       const rulesyncMcpData = {
         mcpServers: {
           "custom-server": {
@@ -845,39 +1025,39 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(rulesyncMcpData),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
-        baseDir: "/custom/path",
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
+        outputRoot: testDir,
         rulesyncMcp,
         validate: true,
       });
 
-      expect(cursorMcp.getBaseDir()).toBe("/custom/path");
-      expect(cursorMcp.getFilePath()).toBe("/custom/path/.cursor/mcp.json");
+      expect(cursorMcp.getOutputRoot()).toBe(testDir);
+      expect(cursorMcp.getFilePath()).toBe(join(testDir, ".cursor", "mcp.json"));
     });
 
-    it("should skip validation when validate is false", () => {
+    it("should skip validation when validate is false", async () => {
       const rulesyncMcp = new RulesyncMcp({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify({ mcpServers: {} }),
       });
 
-      expect(() => {
-        const _cursorMcp = CursorMcp.fromRulesyncMcp({
+      await expect(
+        CursorMcp.fromRulesyncMcp({
           rulesyncMcp,
           validate: false,
-        });
-      }).not.toThrow();
+        }),
+      ).resolves.not.toThrow();
     });
 
-    it("should handle RulesyncMcp with null mcpServers", () => {
+    it("should handle RulesyncMcp with null mcpServers", async () => {
       const rulesyncMcp = new RulesyncMcp({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify({ mcpServers: null }),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: false,
       });
@@ -887,14 +1067,14 @@ describe("CursorMcp", () => {
       });
     });
 
-    it("should handle RulesyncMcp with undefined mcpServers", () => {
+    it("should handle RulesyncMcp with undefined mcpServers", async () => {
       const rulesyncMcp = new RulesyncMcp({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify({ otherProperty: "value" }),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: false,
       });
@@ -902,6 +1082,142 @@ describe("CursorMcp", () => {
       expect(cursorMcp.getJson()).toEqual({
         mcpServers: {},
       });
+    });
+
+    it("should create CursorMcp in global mode with correct paths", async () => {
+      const rulesyncMcpData = {
+        mcpServers: {
+          "global-server": {
+            command: "node",
+            args: ["server.js"],
+          },
+        },
+      };
+
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(rulesyncMcpData),
+      });
+
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        validate: true,
+        global: true,
+      });
+
+      expect(cursorMcp).toBeInstanceOf(CursorMcp);
+      expect(cursorMcp.getRelativeDirPath()).toBe(".cursor");
+      expect(cursorMcp.getRelativeFilePath()).toBe("mcp.json");
+      expect(cursorMcp.getFilePath()).toBe(join(testDir, ".cursor", "mcp.json"));
+      expect(cursorMcp.getJson()).toEqual({ mcpServers: rulesyncMcpData.mcpServers });
+    });
+
+    it("should preserve non-mcpServers properties when updating global config", async () => {
+      const existingGlobalConfig = {
+        mcpServers: {
+          "old-server": {
+            command: "node",
+            args: ["old-server.js"],
+          },
+        },
+        userSettings: {
+          theme: "dark",
+        },
+        version: "1.0.0",
+      };
+      await ensureDir(join(testDir, ".cursor"));
+      await writeFileContent(
+        join(testDir, ".cursor", "mcp.json"),
+        JSON.stringify(existingGlobalConfig, null, 2),
+      );
+
+      const newMcpServers = {
+        mcpServers: {
+          "new-server": {
+            command: "python",
+            args: ["new-server.py"],
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(newMcpServers),
+      });
+
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const json = cursorMcp.getJson();
+      expect(json.mcpServers).toEqual({
+        "new-server": {
+          command: "python",
+          args: ["new-server.py"],
+        },
+      });
+      expect((json as any).userSettings).toEqual({
+        theme: "dark",
+      });
+      expect((json as any).version).toBe("1.0.0");
+    });
+
+    it("should replace mcpServers while preserving non-mcpServers properties in global config", async () => {
+      const existingGlobalConfig = {
+        mcpServers: {
+          "existing-server": {
+            command: "node",
+            args: ["existing-server.js"],
+          },
+        },
+        customProperty: "value",
+      };
+      await ensureDir(join(testDir, ".cursor"));
+      await writeFileContent(
+        join(testDir, ".cursor", "mcp.json"),
+        JSON.stringify(existingGlobalConfig, null, 2),
+      );
+
+      const newMcpConfig = {
+        mcpServers: {
+          "new-server": {
+            command: "python",
+            args: ["new-server.py"],
+          },
+          "another-server": {
+            command: "node",
+            args: ["another.js"],
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(newMcpConfig),
+      });
+
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const json = cursorMcp.getJson();
+      expect(json.mcpServers).toEqual({
+        "new-server": {
+          command: "python",
+          args: ["new-server.py"],
+        },
+        "another-server": {
+          command: "node",
+          args: ["another.js"],
+        },
+      });
+      expect((json as any).customProperty).toBe("value");
     });
   });
 
@@ -917,7 +1233,7 @@ describe("CursorMcp", () => {
       };
 
       const cursorMcp = new CursorMcp({
-        baseDir: "/test/path",
+        outputRoot: "/test/path",
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify(cursorMcpData),
@@ -926,10 +1242,13 @@ describe("CursorMcp", () => {
       const rulesyncMcp = cursorMcp.toRulesyncMcp();
 
       expect(rulesyncMcp).toBeInstanceOf(RulesyncMcp);
-      expect(rulesyncMcp.getBaseDir()).toBe("/test/path");
-      expect(rulesyncMcp.getRelativeDirPath()).toBe(".cursor");
-      expect(rulesyncMcp.getRelativeFilePath()).toBe("rulesync.mcp.json");
-      expect(rulesyncMcp.getFileContent()).toBe(JSON.stringify(cursorMcpData));
+      expect(rulesyncMcp.getOutputRoot()).toBe("/test/path");
+      expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
+      expect(rulesyncMcp.getRelativeFilePath()).toBe("mcp.json");
+      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual({
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+        ...cursorMcpData,
+      });
     });
 
     it("should convert complex CursorMcp to RulesyncMcp", () => {
@@ -953,7 +1272,7 @@ describe("CursorMcp", () => {
       };
 
       const cursorMcp = new CursorMcp({
-        baseDir: "/custom",
+        outputRoot: "/custom",
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify(complexData),
@@ -961,8 +1280,11 @@ describe("CursorMcp", () => {
 
       const rulesyncMcp = cursorMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getBaseDir()).toBe("/custom");
-      expect(rulesyncMcp.getFileContent()).toBe(JSON.stringify(complexData));
+      expect(rulesyncMcp.getOutputRoot()).toBe("/custom");
+      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual({
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+        ...complexData,
+      });
     });
   });
 
@@ -979,14 +1301,14 @@ describe("CursorMcp", () => {
 
     it("should have correct type definitions for parameters", () => {
       const constructorParams: CursorMcpParams = {
-        baseDir: "/custom",
+        outputRoot: "/custom",
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
         fileContent: "{}",
         validate: false,
       };
 
-      expect(constructorParams.baseDir).toBe("/custom");
+      expect(constructorParams.outputRoot).toBe("/custom");
       expect(constructorParams.validate).toBe(false);
     });
   });
@@ -1015,20 +1337,20 @@ describe("CursorMcp", () => {
       expect(typeof cursorMcp.getFileContent()).toBe("string");
       expect(typeof cursorMcp.getRelativeDirPath()).toBe("string");
       expect(typeof cursorMcp.getRelativeFilePath()).toBe("string");
-      expect(typeof cursorMcp.getBaseDir()).toBe("string");
+      expect(typeof cursorMcp.getOutputRoot()).toBe("string");
       expect(typeof cursorMcp.getRelativePathFromCwd()).toBe("string");
     });
 
     it("should call parent constructor correctly", () => {
       const jsonData = { mcpServers: { test: { command: "node" } } };
       const cursorMcp = new CursorMcp({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: ".cursor",
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify(jsonData),
       });
 
-      expect(cursorMcp.getBaseDir()).toBe("/test/base");
+      expect(cursorMcp.getOutputRoot()).toBe("/test/base");
       expect(cursorMcp.getRelativeDirPath()).toBe(".cursor");
       expect(cursorMcp.getRelativeFilePath()).toBe("mcp.json");
       expect(cursorMcp.getFileContent()).toBe(JSON.stringify(jsonData));
@@ -1189,7 +1511,7 @@ describe("CursorMcp", () => {
       expect(cursorMcp.getJson()).toEqual(deeplyNestedData);
     });
 
-    it("should handle conversion from RulesyncMcp and back", () => {
+    it("should handle conversion from RulesyncMcp and back", async () => {
       const originalData = {
         mcpServers: {
           "roundtrip-server": {
@@ -1208,7 +1530,7 @@ describe("CursorMcp", () => {
         fileContent: JSON.stringify(originalData),
       });
 
-      const cursorMcp = CursorMcp.fromRulesyncMcp({
+      const cursorMcp = await CursorMcp.fromRulesyncMcp({
         rulesyncMcp,
         validate: false,
       });
@@ -1217,6 +1539,7 @@ describe("CursorMcp", () => {
 
       expect(JSON.parse(backToRulesync.getFileContent())).toEqual({
         mcpServers: originalData.mcpServers,
+        $schema: RULESYNC_MCP_SCHEMA_URL,
       });
     });
   });

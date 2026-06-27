@@ -1,6 +1,7 @@
 import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import type { AiFileFromFileParams, AiFileParams } from "../../types/ai-file.js";
 import { ToolFile } from "../../types/tool-file.js";
+import type { Logger } from "../../utils/logger.js";
 import { RulesyncHooks } from "./rulesync-hooks.js";
 
 export type ToolHooksParams = AiFileParams;
@@ -12,10 +13,13 @@ export type ToolHooksFromRulesyncHooksParams = Omit<
   rulesyncHooks: RulesyncHooks;
 };
 
-export type ToolHooksFromFileParams = Pick<AiFileFromFileParams, "baseDir" | "validate" | "global">;
+export type ToolHooksFromFileParams = Pick<
+  AiFileFromFileParams,
+  "outputRoot" | "validate" | "global"
+>;
 
 export type ToolHooksForDeletionParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath: string;
   relativeFilePath: string;
   global?: boolean;
@@ -45,7 +49,7 @@ export abstract class ToolHooks extends ToolFile {
     throw new Error("Please implement this method in the subclass.");
   }
 
-  abstract toRulesyncHooks(): RulesyncHooks;
+  abstract toRulesyncHooks(options?: { logger?: Logger }): RulesyncHooks;
 
   protected toRulesyncHooksDefault({
     fileContent = undefined,
@@ -53,7 +57,7 @@ export abstract class ToolHooks extends ToolFile {
     fileContent?: string;
   } = {}): RulesyncHooks {
     return new RulesyncHooks({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
       relativeFilePath: "hooks.json",
       fileContent: fileContent ?? this.fileContent,
@@ -66,5 +70,12 @@ export abstract class ToolHooks extends ToolFile {
 
   static forDeletion(_params: ToolHooksForDeletionParams): ToolHooks {
     throw new Error("Please implement this method in the subclass.");
+  }
+
+  static async getAuxiliaryFiles(_params: {
+    outputRoot?: string;
+    global?: boolean;
+  }): Promise<ToolFile[]> {
+    return [];
   }
 }

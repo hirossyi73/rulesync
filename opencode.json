@@ -1,21 +1,33 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "lsp": false,
-  "model": "github-copilot/gpt-5.2-codex",
+  "model": "opencode-go/deepseek-v4-pro",
   "agent": {
+    "plan": {
+      "mode": "primary",
+      "variant": "high",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true
+      }
+    },
     "build": {
       "mode": "primary",
+      "variant": "high",
       "tools": {
         "write": true,
         "edit": true,
         "bash": true
       }
     },
-    "plan": {
+    "build-lite": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "medium",
       "mode": "primary",
       "tools": {
-        "write": false,
-        "edit": false,
+        "write": true,
+        "edit": true,
         "bash": true
       }
     }
@@ -55,5 +67,11 @@
       "environment": {}
     }
   },
-  "share": "disabled"
+  "share": "disabled",
+  "instructions": [
+    ".github/workflows/AGENTS.md",
+    ".opencode/memories/coding-guidelines.md",
+    ".opencode/memories/feature-change-guidelines.md",
+    ".opencode/memories/testing-guidelines.md"
+  ]
 }

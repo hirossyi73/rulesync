@@ -1,5 +1,10 @@
 import { join } from "node:path";
 
+import {
+  OPENCODE_DIR,
+  OPENCODE_GLOBAL_DIR,
+  OPENCODE_RULE_FILE_NAME,
+} from "../../constants/opencode-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncRule } from "./rulesync-rule.js";
@@ -8,13 +13,10 @@ import {
   ToolRuleForDeletionParams,
   ToolRuleFromFileParams,
   type ToolRuleFromRulesyncRuleParams,
-  ToolRuleParams,
   ToolRuleSettablePaths,
   ToolRuleSettablePathsGlobal,
   buildToolPath,
 } from "./tool-rule.js";
-
-export type OpenCodeRuleParams = ToolRuleParams;
 
 export type OpenCodeRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & {
   root: {
@@ -36,24 +38,24 @@ export class OpenCodeRule extends ToolRule {
     if (global) {
       return {
         root: {
-          relativeDirPath: buildToolPath(".config/opencode", ".", excludeToolDir),
-          relativeFilePath: "AGENTS.md",
+          relativeDirPath: buildToolPath(OPENCODE_GLOBAL_DIR, ".", excludeToolDir),
+          relativeFilePath: OPENCODE_RULE_FILE_NAME,
         },
       };
     }
     return {
       root: {
         relativeDirPath: ".",
-        relativeFilePath: "AGENTS.md",
+        relativeFilePath: OPENCODE_RULE_FILE_NAME,
       },
       nonRoot: {
-        relativeDirPath: buildToolPath(".opencode", "memories", excludeToolDir),
+        relativeDirPath: buildToolPath(OPENCODE_DIR, "memories", excludeToolDir),
       },
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
@@ -64,11 +66,11 @@ export class OpenCodeRule extends ToolRule {
     if (isRoot) {
       const relativePath = paths.root.relativeFilePath;
       const fileContent = await readFileContent(
-        join(baseDir, paths.root.relativeDirPath, relativePath),
+        join(outputRoot, paths.root.relativeDirPath, relativePath),
       );
 
       return new OpenCodeRule({
-        baseDir,
+        outputRoot,
         relativeDirPath: paths.root.relativeDirPath,
         relativeFilePath: paths.root.relativeFilePath,
         fileContent,
@@ -82,9 +84,9 @@ export class OpenCodeRule extends ToolRule {
     }
 
     const relativePath = join(paths.nonRoot.relativeDirPath, relativeFilePath);
-    const fileContent = await readFileContent(join(baseDir, relativePath));
+    const fileContent = await readFileContent(join(outputRoot, relativePath));
     return new OpenCodeRule({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.nonRoot.relativeDirPath,
       relativeFilePath: relativeFilePath,
       fileContent,
@@ -94,15 +96,15 @@ export class OpenCodeRule extends ToolRule {
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
     global = false,
   }: ToolRuleFromRulesyncRuleParams): OpenCodeRule {
     const paths = this.getSettablePaths({ global });
     return new OpenCodeRule(
-      this.buildToolRuleParamsDefault({
-        baseDir,
+      this.buildToolRuleParamsAgentsmd({
+        outputRoot,
         rulesyncRule,
         validate,
         rootPath: paths.root,
@@ -122,7 +124,7 @@ export class OpenCodeRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
     global = false,
@@ -131,7 +133,7 @@ export class OpenCodeRule extends ToolRule {
     const isRoot = relativeFilePath === paths.root.relativeFilePath;
 
     return new OpenCodeRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

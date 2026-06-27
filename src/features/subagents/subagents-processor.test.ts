@@ -3,12 +3,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
 import { ClaudecodeSubagent } from "./claudecode-subagent.js";
 import { CodexCliSubagent } from "./codexcli-subagent.js";
 import { CopilotSubagent } from "./copilot-subagent.js";
 import { CursorSubagent } from "./cursor-subagent.js";
+import { JunieSubagent } from "./junie-subagent.js";
 import { RulesyncSubagent } from "./rulesync-subagent.js";
 import {
   SubagentsProcessor,
@@ -25,6 +27,13 @@ import {
 const createMockGetFactoryThatThrowsUnsupported = () => {
   throw new Error("Unsupported tool target: unsupported");
 };
+
+/** Builds a minimal Junie subagent Markdown file with valid frontmatter. */
+const junieSubagentMd = (name: string): string => `---
+name: ${name}
+description: ${name} description
+---
+${name} content`;
 
 describe("SubagentsProcessor", () => {
   let testDir: string;
@@ -45,15 +54,17 @@ describe("SubagentsProcessor", () => {
   describe("constructor", () => {
     it("should create instance with valid tool target", () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
       expect(processor).toBeInstanceOf(SubagentsProcessor);
     });
 
-    it("should use default baseDir when not provided", () => {
+    it("should use default outputRoot when not provided", () => {
       const processor = new SubagentsProcessor({
+        logger: createMockLogger(),
         toolTarget: "claudecode",
       });
 
@@ -63,7 +74,8 @@ describe("SubagentsProcessor", () => {
     it("should validate tool target with schema", () => {
       expect(() => {
         const _processor = new SubagentsProcessor({
-          baseDir: testDir,
+          logger: createMockLogger(),
+          outputRoot: testDir,
           toolTarget: "invalid" as SubagentsProcessorToolTarget,
         });
       }).toThrow();
@@ -73,7 +85,8 @@ describe("SubagentsProcessor", () => {
       for (const toolTarget of subagentsProcessorToolTargets) {
         expect(() => {
           const _processor = new SubagentsProcessor({
-            baseDir: testDir,
+            logger: createMockLogger(),
+            outputRoot: testDir,
             toolTarget,
           });
         }).not.toThrow();
@@ -86,14 +99,15 @@ describe("SubagentsProcessor", () => {
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
     });
 
     it("should filter and convert RulesyncSubagent instances for claudecode", async () => {
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: {
@@ -123,13 +137,14 @@ describe("SubagentsProcessor", () => {
 
     it("should convert with global flag when processor is in global mode", async () => {
       const globalProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
         global: true,
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "global-test-agent.md",
         frontmatter: {
@@ -167,13 +182,14 @@ describe("SubagentsProcessor", () => {
 
     it("should throw error for unsupported tool target", async () => {
       const unsupportedProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
         getFactory: createMockGetFactoryThatThrowsUnsupported,
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: { name: "test", description: "test", targets: ["*"] },
@@ -188,12 +204,13 @@ describe("SubagentsProcessor", () => {
 
     it("should convert RulesyncSubagent to CopilotSubagent for copilot target", async () => {
       const copilotProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "copilot",
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: {
@@ -213,12 +230,13 @@ describe("SubagentsProcessor", () => {
 
     it("should convert RulesyncSubagent to CursorSubagent for cursor target", async () => {
       const cursorProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "cursor",
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: {
@@ -238,12 +256,13 @@ describe("SubagentsProcessor", () => {
 
     it("should convert RulesyncSubagent to CodexCliSubagent for codexcli target", async () => {
       const codexcliProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "codexcli",
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: {
@@ -263,12 +282,13 @@ describe("SubagentsProcessor", () => {
 
     it("should convert RulesyncSubagent to OpenCodeSubagent for opencode target", async () => {
       const opencodeProcessor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "opencode",
       });
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "opencode-agent.md",
         frontmatter: {
@@ -284,7 +304,7 @@ describe("SubagentsProcessor", () => {
 
       expect(toolFiles).toHaveLength(1);
       const [opencodeSubagent] = toolFiles;
-      expect(opencodeSubagent?.getRelativeDirPath()).toBe(".opencode/agent");
+      expect(opencodeSubagent?.getRelativeDirPath()).toBe(".opencode/agents");
     });
   });
 
@@ -293,14 +313,15 @@ describe("SubagentsProcessor", () => {
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
     });
 
     it("should filter and convert ToolSubagent instances", async () => {
       const claudecodeSubagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         fileContent: `---
@@ -348,7 +369,7 @@ Test agent content`,
 
     it("should skip simulated subagents when converting to rulesync", async () => {
       const claudecodeSubagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "claude-agent.md",
         fileContent: `---
@@ -365,7 +386,7 @@ Claude content`,
       });
 
       const copilotSubagent = new CopilotSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".github/agents",
         relativeFilePath: "copilot-agent.md",
         frontmatter: {
@@ -379,7 +400,7 @@ Claude content`,
       });
 
       const cursorSubagent = new CursorSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".cursor/agents",
         relativeFilePath: "cursor-agent.md",
         frontmatter: {
@@ -392,7 +413,7 @@ Claude content`,
       });
 
       const codexCliSubagent = new CodexCliSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".codex/agents",
         relativeFilePath: "codex-agent.toml",
         body: 'name = "codex-agent"\ndescription = "CodexCli agent"',
@@ -415,7 +436,8 @@ Claude content`,
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
     });
@@ -518,7 +540,7 @@ Invalid content`;
       expect(validRulesyncSubagent.getFrontmatter().name).toBe("valid-agent");
     });
 
-    it("should load rulesync files from cwd even when baseDir is different (global mode)", async () => {
+    it("should load rulesync files from cwd even when outputRoot is different (global mode)", async () => {
       const subagentsDir = join(testDir, RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH);
       await ensureDir(subagentsDir);
 
@@ -531,12 +553,13 @@ Global agent content`;
 
       await writeFileContent(join(subagentsDir, "global-agent.md"), validSubagentContent);
 
-      // Use a different baseDir to simulate global mode (baseDir = homeDir)
-      const differentBaseDir = join(testDir, "fake-home");
-      await ensureDir(differentBaseDir);
+      // Use a different outputRoot to simulate global mode (outputRoot = homeDir)
+      const differentOutputRoot = join(testDir, "fake-home");
+      await ensureDir(differentOutputRoot);
 
       const globalProcessor = new SubagentsProcessor({
-        baseDir: differentBaseDir,
+        logger: createMockLogger(),
+        outputRoot: differentOutputRoot,
         toolTarget: "claudecode",
         global: true,
       });
@@ -548,12 +571,46 @@ Global agent content`;
       const rulesyncSubagent = rulesyncFiles[0] as RulesyncSubagent;
       expect(rulesyncSubagent.getFrontmatter().name).toBe("global-agent");
     });
+
+    // Mirror the per-feature inputRoot threading assertion used in
+    // commands-processor.test.ts: when inputRoot is set, loadRulesyncFiles
+    // reads from `<inputRoot>/.rulesync/subagents` instead of
+    // `<process.cwd()>/.rulesync/subagents`.
+    it("should read rulesync subagent files from inputRoot instead of process.cwd()", async () => {
+      const customInputRoot = join(testDir, "custom-rulesync-dir");
+      const customSubagentsDir = join(customInputRoot, RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH);
+      await ensureDir(customSubagentsDir);
+
+      const subagentContent = `---
+name: input-root-agent
+description: Subagent loaded from inputRoot
+targets: ["*"]
+---
+Body from inputRoot`;
+
+      await writeFileContent(join(customSubagentsDir, "input-root-agent.md"), subagentContent);
+
+      // outputRoot is testDir (process.cwd()); no subagents file exists there,
+      // so a successful load proves the inputRoot-aware processor read from inputRoot.
+      const inputRootProcessor = new SubagentsProcessor({
+        logger: createMockLogger(),
+        outputRoot: testDir,
+        inputRoot: customInputRoot,
+        toolTarget: "claudecode",
+      });
+
+      const rulesyncFiles = await inputRootProcessor.loadRulesyncFiles();
+      expect(rulesyncFiles).toHaveLength(1);
+      expect(rulesyncFiles[0]).toBeInstanceOf(RulesyncSubagent);
+      expect((rulesyncFiles[0] as RulesyncSubagent).getFrontmatter().name).toBe("input-root-agent");
+    });
   });
 
   describe("loadToolFiles", () => {
     it("should delegate to loadClaudecodeSubagents for claudecode target", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
       const toolFiles = await processor.loadToolFiles();
@@ -562,7 +619,8 @@ Global agent content`;
 
     it("should delegate to loadCopilotSubagents for copilot target", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "copilot",
       });
       const toolFiles = await processor.loadToolFiles();
@@ -571,7 +629,8 @@ Global agent content`;
 
     it("should delegate to loadCursorSubagents for cursor target", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "cursor",
       });
       const toolFiles = await processor.loadToolFiles();
@@ -580,7 +639,8 @@ Global agent content`;
 
     it("should delegate to loadCodexCliSubagents for codexcli target", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "codexcli",
       });
       const toolFiles = await processor.loadToolFiles();
@@ -589,7 +649,8 @@ Global agent content`;
 
     it("should throw error for unsupported tool target", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
         getFactory: createMockGetFactoryThatThrowsUnsupported,
       });
@@ -600,12 +661,73 @@ Global agent content`;
     });
   });
 
+  describe("loadJunieSubagents", () => {
+    let processor: SubagentsProcessor;
+
+    beforeEach(() => {
+      processor = new SubagentsProcessor({
+        logger: createMockLogger(),
+        outputRoot: testDir,
+        toolTarget: "junie",
+      });
+    });
+
+    it("should import from both .junie/agents and the shared .agents root", async () => {
+      const junieDir = join(testDir, ".junie", "agents");
+      const sharedDir = join(testDir, ".agents");
+      await ensureDir(junieDir);
+      await ensureDir(sharedDir);
+
+      await writeFileContent(join(junieDir, "native-agent.md"), junieSubagentMd("native-agent"));
+      await writeFileContent(join(sharedDir, "shared-agent.md"), junieSubagentMd("shared-agent"));
+
+      const toolFiles = await processor.loadToolFiles();
+
+      expect(toolFiles).toHaveLength(2);
+      expect(toolFiles.every((file) => file instanceof JunieSubagent)).toBe(true);
+      const dirPaths = toolFiles.map((file) => file.getRelativeDirPath()).toSorted();
+      expect(dirPaths).toEqual([".agents", join(".junie", "agents")].toSorted());
+    });
+
+    it("should keep the higher-precedence copy when the same name exists in both roots", async () => {
+      const junieDir = join(testDir, ".junie", "agents");
+      const sharedDir = join(testDir, ".agents");
+      await ensureDir(junieDir);
+      await ensureDir(sharedDir);
+
+      // Same relative path in both roots; `.junie/agents/` is scanned first and wins.
+      await writeFileContent(join(junieDir, "planner.md"), junieSubagentMd("planner"));
+      await writeFileContent(join(sharedDir, "planner.md"), junieSubagentMd("planner"));
+
+      const toolFiles = await processor.loadToolFiles();
+
+      expect(toolFiles).toHaveLength(1);
+      expect(toolFiles[0]?.getRelativeDirPath()).toBe(join(".junie", "agents"));
+    });
+
+    it("should not delete files in the .agents import root (forDeletion targets .junie/agents only)", async () => {
+      const junieDir = join(testDir, ".junie", "agents");
+      const sharedDir = join(testDir, ".agents");
+      await ensureDir(junieDir);
+      await ensureDir(sharedDir);
+
+      await writeFileContent(join(junieDir, "native-agent.md"), junieSubagentMd("native-agent"));
+      await writeFileContent(join(sharedDir, "shared-agent.md"), junieSubagentMd("shared-agent"));
+
+      const filesToDelete = await processor.loadToolFiles({ forDeletion: true });
+
+      expect(filesToDelete).toHaveLength(1);
+      expect(filesToDelete[0]?.getRelativeDirPath()).toBe(join(".junie", "agents"));
+    });
+  });
+
   describe("loadCopilotSubagents", () => {
     let processor: SubagentsProcessor;
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "copilot",
       });
     });
@@ -639,7 +761,8 @@ Copilot agent content`;
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "cursor",
       });
     });
@@ -673,7 +796,8 @@ Cursor agent content`;
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "codexcli",
       });
     });
@@ -703,7 +827,8 @@ Cursor agent content`;
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
     });
@@ -772,7 +897,8 @@ Second content`;
     describe("global mode", () => {
       it("should use global paths when global=true", async () => {
         const globalProcessor = new SubagentsProcessor({
-          baseDir: testDir,
+          logger: createMockLogger(),
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
@@ -800,7 +926,8 @@ Global agent content`;
 
       it("should return empty array when global agents directory does not exist", async () => {
         const globalProcessor = new SubagentsProcessor({
-          baseDir: testDir,
+          logger: createMockLogger(),
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
@@ -811,7 +938,8 @@ Global agent content`;
 
       it("should load multiple global subagent files", async () => {
         const globalProcessor = new SubagentsProcessor({
-          baseDir: testDir,
+          logger: createMockLogger(),
+          outputRoot: testDir,
           toolTarget: "claudecode",
           global: true,
         });
@@ -891,27 +1019,44 @@ Second global content`;
   });
 
   describe("getToolTargets with global: true", () => {
-    it("should return claudecode, cursor, factorydroid, and opencode as global-supported targets", () => {
+    it("should return claudecode, codexcli, copilotcli, cursor, kilo, opencode, and rovodev as global-supported targets", () => {
       const toolTargets = SubagentsProcessor.getToolTargets({ global: true });
 
       expect(Array.isArray(toolTargets)).toBe(true);
       expect(toolTargets).toEqual([
+        "augmentcode",
         "claudecode",
         "claudecode-legacy",
+        "cline",
+        "codexcli",
+        "copilot",
+        "copilotcli",
         "cursor",
+        "deepagents",
+        "devin",
         "factorydroid",
+        "goose",
+        "hermesagent",
+        "grokcli",
+        "junie",
+        "kilo",
         "opencode",
+        "qwencode",
+        "rovodev",
+        "takt",
+        "vibe",
       ]);
     });
 
     it("should not include simulated targets", () => {
       const toolTargets = SubagentsProcessor.getToolTargets({ global: true });
 
-      expect(toolTargets).not.toContain("copilot");
-      expect(toolTargets).not.toContain("codexcli");
       expect(toolTargets).not.toContain("agentsmd");
-      expect(toolTargets).not.toContain("geminicli");
       expect(toolTargets).not.toContain("roo");
+      // factorydroid is now native and global-capable.
+      expect(toolTargets).toContain("factorydroid");
+      // copilot is native (not simulated) and now global-capable via ~/.copilot/agents.
+      expect(toolTargets).toContain("copilot");
     });
 
     it("should be callable without instance", () => {
@@ -931,26 +1076,38 @@ Second global content`;
       expect(new Set(subagentsProcessorToolTargets)).toEqual(
         new Set([
           "agentsmd",
+          "augmentcode",
           "claudecode",
           "claudecode-legacy",
+          "cline",
           "codexcli",
           "copilot",
+          "copilotcli",
           "cursor",
+          "deepagents",
+          "devin",
           "factorydroid",
-          "geminicli",
+          "goose",
+          "hermesagent",
+          "grokcli",
           "junie",
+          "kilo",
           "kiro",
+          "kiro-cli",
+          "kiro-ide",
           "opencode",
+          "qwencode",
           "roo",
+          "rovodev",
+          "takt",
+          "vibe",
         ]),
       );
       expect(Array.isArray(subagentsProcessorToolTargets)).toBe(true);
     });
 
     it("should export subagentsProcessorToolTargetsSimulated constant", () => {
-      expect(new Set(subagentsProcessorToolTargetsSimulated)).toEqual(
-        new Set(["agentsmd", "factorydroid", "geminicli", "roo"]),
-      );
+      expect(new Set(subagentsProcessorToolTargetsSimulated)).toEqual(new Set(["agentsmd"]));
       expect(Array.isArray(subagentsProcessorToolTargetsSimulated)).toBe(true);
     });
 
@@ -962,6 +1119,7 @@ Second global content`;
         "copilot",
         "cursor",
         "codexcli",
+        "kilo",
         "opencode",
       ];
       validTargets.forEach((target) => {
@@ -973,12 +1131,13 @@ Second global content`;
   describe("inheritance from FeatureProcessor", () => {
     it("should extend FeatureProcessor", () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
       expect(processor).toBeInstanceOf(SubagentsProcessor);
-      // Should have inherited baseDir property and other FeatureProcessor functionality
+      // Should have inherited outputRoot property and other FeatureProcessor functionality
       expect(typeof processor.convertRulesyncFilesToToolFiles).toBe("function");
       expect(typeof processor.convertToolFilesToRulesyncFiles).toBe("function");
       expect(typeof processor.loadRulesyncFiles).toBe("function");
@@ -991,7 +1150,8 @@ Second global content`;
 
     beforeEach(() => {
       processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
     });
@@ -1045,7 +1205,8 @@ Valid content`,
   describe("loadToolFiles with forDeletion: true", () => {
     it("should return files with correct paths for deletion", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1074,13 +1235,13 @@ Test agent content`;
         "copilot",
         "cursor",
         "codexcli",
-        "geminicli",
         "roo",
       ];
 
       for (const target of targets) {
         const processor = new SubagentsProcessor({
-          baseDir: testDir,
+          logger: createMockLogger(),
+          outputRoot: testDir,
           toolTarget: target,
         });
 
@@ -1093,7 +1254,8 @@ Test agent content`;
 
     it("should return empty array when no files exist", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1103,7 +1265,8 @@ Test agent content`;
 
     it("should handle multiple files correctly", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 
@@ -1133,7 +1296,8 @@ Second agent`;
 
     it("should succeed even when file has broken frontmatter", async () => {
       const processor = new SubagentsProcessor({
-        baseDir: testDir,
+        logger: createMockLogger(),
+        outputRoot: testDir,
         toolTarget: "claudecode",
       });
 

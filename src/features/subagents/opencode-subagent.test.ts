@@ -26,18 +26,18 @@ describe("OpenCodeSubagent", () => {
 
   it("should return settable paths for project and global scopes", () => {
     expect(OpenCodeSubagent.getSettablePaths()).toEqual({
-      relativeDirPath: ".opencode/agent",
+      relativeDirPath: ".opencode/agents",
     });
 
     expect(OpenCodeSubagent.getSettablePaths({ global: true })).toEqual({
-      relativeDirPath: join(".config", "opencode", "agent"),
+      relativeDirPath: join(".config", "opencode", "agents"),
     });
   });
 
   it("should create a RulesyncSubagent with opencode section and subagent mode", () => {
     const subagent = new OpenCodeSubagent({
-      baseDir: testDir,
-      relativeDirPath: ".opencode/agent",
+      outputRoot: testDir,
+      relativeDirPath: ".opencode/agents",
       relativeFilePath: "review.md",
       frontmatter: {
         description: "Reviews code",
@@ -64,7 +64,7 @@ describe("OpenCodeSubagent", () => {
 
   it("should build OpenCode subagent from Rulesync subagent and preserve mode", () => {
     const rulesyncSubagent = new RulesyncSubagent({
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
       relativeFilePath: "docs-writer.md",
       frontmatter: {
@@ -83,7 +83,7 @@ describe("OpenCodeSubagent", () => {
     const toolSubagent = OpenCodeSubagent.fromRulesyncSubagent({
       rulesyncSubagent,
       global: true,
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
     }) as OpenCodeSubagent;
 
@@ -94,12 +94,12 @@ describe("OpenCodeSubagent", () => {
       model: "model-x",
       mode: "primary",
     });
-    expect(toolSubagent.getRelativeDirPath()).toBe(join(".config", "opencode", "agent"));
+    expect(toolSubagent.getRelativeDirPath()).toBe(join(".config", "opencode", "agents"));
   });
 
   it("should build OpenCode subagent with default mode when not specified", () => {
     const rulesyncSubagent = new RulesyncSubagent({
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
       relativeFilePath: "docs-writer.md",
       frontmatter: {
@@ -117,7 +117,7 @@ describe("OpenCodeSubagent", () => {
     const toolSubagent = OpenCodeSubagent.fromRulesyncSubagent({
       rulesyncSubagent,
       global: true,
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
     }) as OpenCodeSubagent;
 
@@ -128,13 +128,13 @@ describe("OpenCodeSubagent", () => {
       model: "model-x",
       mode: "subagent",
     });
-    expect(toolSubagent.getRelativeDirPath()).toBe(join(".config", "opencode", "agent"));
+    expect(toolSubagent.getRelativeDirPath()).toBe(join(".config", "opencode", "agents"));
   });
 
   it("should preserve primary mode for OpenCode subagent", () => {
     // Regression test for: opencode.mode was hardcoded to 'subagent' instead of being preserved
     const rulesyncSubagent = new RulesyncSubagent({
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
       relativeFilePath: "primary-agent.md",
       frontmatter: {
@@ -157,7 +157,7 @@ describe("OpenCodeSubagent", () => {
     const toolSubagent = OpenCodeSubagent.fromRulesyncSubagent({
       rulesyncSubagent,
       global: true,
-      baseDir: testDir,
+      outputRoot: testDir,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
     }) as OpenCodeSubagent;
 
@@ -170,7 +170,7 @@ describe("OpenCodeSubagent", () => {
   });
 
   it("should load from file and validate frontmatter", async () => {
-    const dirPath = join(testDir, ".opencode", "agent");
+    const dirPath = join(testDir, ".opencode", "agents");
     const filePath = join(dirPath, "general.md");
 
     await writeFileContent(
@@ -204,8 +204,37 @@ Assist with any tasks`,
     expect(result.success).toBe(true);
   });
 
+  it("should validate the documented field types but keep unknown fields (looseObject)", () => {
+    // Known fields are now typed explicitly (strict-schema pattern, #1658)...
+    expect(
+      OpenCodeSubagentFrontmatterSchema.safeParse({
+        description: "Agent",
+        temperature: 0.4,
+        top_p: 0.9,
+        model: "some-model",
+        tools: { read: true, write: false },
+      }).success,
+    ).toBe(true);
+    // ...a wrong type for a declared field is rejected...
+    expect(
+      OpenCodeSubagentFrontmatterSchema.safeParse({
+        description: "Agent",
+        temperature: "hot",
+      }).success,
+    ).toBe(false);
+    // ...while forward-compatible unknown fields still round-trip.
+    const loose = OpenCodeSubagentFrontmatterSchema.safeParse({
+      description: "Agent",
+      futureOpenCodeField: "kept",
+    });
+    expect(loose.success).toBe(true);
+    expect(loose.success && (loose.data as Record<string, unknown>).futureOpenCodeField).toBe(
+      "kept",
+    );
+  });
+
   it("should apply default mode 'subagent' when mode is omitted", async () => {
-    const dirPath = join(testDir, ".opencode", "agent");
+    const dirPath = join(testDir, ".opencode", "agents");
     const filePath = join(dirPath, "no-mode.md");
 
     await writeFileContent(
@@ -225,7 +254,7 @@ Body content`,
   });
 
   it("should preserve custom mode value when explicitly set", async () => {
-    const dirPath = join(testDir, ".opencode", "agent");
+    const dirPath = join(testDir, ".opencode", "agents");
     const filePath = join(dirPath, "custom-mode.md");
 
     await writeFileContent(
@@ -242,5 +271,111 @@ Body content`,
     });
 
     expect(subagent.getFrontmatter().mode).toBe("all");
+  });
+
+  describe("forDeletion", () => {
+    it("should create a deletable placeholder", () => {
+      const subagent = OpenCodeSubagent.forDeletion({
+        outputRoot: testDir,
+        relativeDirPath: ".opencode/agents",
+        relativeFilePath: "obsolete.md",
+      });
+      expect(subagent.isDeletable()).toBe(true);
+      expect(subagent.getBody()).toBe("");
+    });
+
+    it("should preserve the global flag passthrough (regression for #1639)", () => {
+      const subagent = OpenCodeSubagent.forDeletion({
+        outputRoot: testDir,
+        relativeDirPath: join(".config", "opencode", "agents"),
+        relativeFilePath: "obsolete.md",
+        global: true,
+      });
+      expect((subagent as unknown as { global: boolean }).global).toBe(true);
+    });
+  });
+
+  describe("loadAdditionalImportFiles", () => {
+    it("imports inline agents from opencode.json", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({
+          agent: {
+            reviewer: {
+              description: "Reviews code",
+              mode: "subagent",
+              model: "anthropic/claude-3-5-sonnet-20241022",
+              prompt: "You are a careful code reviewer.",
+              temperature: 0.2,
+            },
+          },
+        }),
+      );
+
+      const subagents = await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir });
+
+      expect(subagents).toHaveLength(1);
+      const [subagent] = subagents;
+      expect(subagent).toBeInstanceOf(OpenCodeSubagent);
+      expect(subagent?.getRelativeFilePath()).toBe("reviewer.md");
+      expect(subagent?.getBody()).toBe("You are a careful code reviewer.");
+      const frontmatter = subagent?.getFrontmatter() as Record<string, unknown>;
+      expect(frontmatter.description).toBe("Reviews code");
+      expect(frontmatter.mode).toBe("subagent");
+      expect(frontmatter.model).toBe("anthropic/claude-3-5-sonnet-20241022");
+      expect(frontmatter.temperature).toBe(0.2);
+      expect(frontmatter.prompt).toBeUndefined();
+    });
+
+    it("resolves a {file:./path} prompt reference relative to the config dir", async () => {
+      await writeFileContent(join(testDir, "prompts", "agent.txt"), "Prompt from file");
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({
+          agent: { helper: { description: "Helper", prompt: "{file:./prompts/agent.txt}" } },
+        }),
+      );
+
+      const [subagent] = await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir });
+
+      expect(subagent?.getBody()).toBe("Prompt from file");
+    });
+
+    it("keeps the literal {file:...} value when the referenced file is missing", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ agent: { helper: { prompt: "{file:./missing.txt}" } } }),
+      );
+
+      const [subagent] = await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir });
+
+      expect(subagent?.getBody()).toBe("{file:./missing.txt}");
+    });
+
+    it("defaults the mode and round-trips into a RulesyncSubagent", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ agent: { plain: { description: "Plain", prompt: "Do work" } } }),
+      );
+
+      const [subagent] = await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir });
+      expect(subagent).toBeDefined();
+      expect((subagent?.getFrontmatter() as Record<string, unknown>)?.mode).toBe("subagent");
+
+      const rulesyncSubagent = subagent?.toRulesyncSubagent();
+      expect(rulesyncSubagent).toBeInstanceOf(RulesyncSubagent);
+      expect(rulesyncSubagent?.getBody()).toBe("Do work");
+      expect(rulesyncSubagent?.getRelativeFilePath()).toBe("plain.md");
+    });
+
+    it("returns an empty array when there is no agent block or config", async () => {
+      expect(await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir })).toEqual([]);
+
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ command: { foo: { template: "x" } } }),
+      );
+      expect(await OpenCodeSubagent.loadAdditionalImportFiles({ outputRoot: testDir })).toEqual([]);
+    });
   });
 });

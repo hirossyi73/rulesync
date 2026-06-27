@@ -18,6 +18,17 @@
     ".zed/settings.json",
     ".vscode/settings.json",
     ".claude/settings.json",
-    ".serena/project.yml"
+    ".serena/project.yml",
+    ".github/copilot-instructions.md",
+    ".github/instructions/**",
+    "rulesync.local.jsonc"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.json", "**/*.jsonc"],
+      "options": {
+        "trailingComma": "none"
+      }
+    }
   ]
 }

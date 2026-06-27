@@ -2,6 +2,11 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import {
+  CLAUDECODE_DIR,
+  CLAUDECODE_RULE_FILE_NAME,
+  CLAUDECODE_RULES_DIR_NAME,
+} from "../../constants/claudecode-paths.js";
 import { RULESYNC_RULES_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
@@ -23,7 +28,7 @@ import {
  * Frontmatter schema for Claude Code modular rules
  * @see https://code.claude.com/docs/en/memory#modular-rules-with-clauderules
  */
-export const ClaudecodeRuleFrontmatterSchema = z.object({
+const ClaudecodeRuleFrontmatterSchema = z.object({
   paths: z.optional(z.array(z.string())),
 });
 
@@ -77,26 +82,32 @@ export class ClaudecodeRule extends ToolRule {
     excludeToolDir?: boolean;
   } = {}): ClaudecodeRuleSettablePaths | ClaudecodeRuleSettablePathsGlobal {
     if (global) {
+      // Claude Code reads user-scoped modular rules from `~/.claude/rules/*.md`
+      // (https://code.claude.com/docs/en/memory — "User-level rules"), so global
+      // non-root rules are generated there instead of being dropped.
       return {
         root: {
-          relativeDirPath: buildToolPath(".claude", ".", excludeToolDir),
-          relativeFilePath: "CLAUDE.md",
+          relativeDirPath: buildToolPath(CLAUDECODE_DIR, ".", excludeToolDir),
+          relativeFilePath: CLAUDECODE_RULE_FILE_NAME,
+        },
+        nonRoot: {
+          relativeDirPath: buildToolPath(CLAUDECODE_DIR, CLAUDECODE_RULES_DIR_NAME, excludeToolDir),
         },
       };
     }
     return {
       root: {
         relativeDirPath: ".",
-        relativeFilePath: "CLAUDE.md",
+        relativeFilePath: CLAUDECODE_RULE_FILE_NAME,
       },
       alternativeRoots: [
         {
-          relativeDirPath: ".claude",
-          relativeFilePath: "CLAUDE.md",
+          relativeDirPath: CLAUDECODE_DIR,
+          relativeFilePath: CLAUDECODE_RULE_FILE_NAME,
         },
       ],
       nonRoot: {
-        relativeDirPath: buildToolPath(".claude", "rules", excludeToolDir),
+        relativeDirPath: buildToolPath(CLAUDECODE_DIR, CLAUDECODE_RULES_DIR_NAME, excludeToolDir),
       },
       reference: {
         relativeDirPath: buildToolPath(".claude", "references", excludeToolDir),
@@ -134,7 +145,7 @@ export class ClaudecodeRule extends ToolRule {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
@@ -146,11 +157,11 @@ export class ClaudecodeRule extends ToolRule {
     if (isRoot) {
       const rootDirPath = overrideDirPath ?? paths.root.relativeDirPath;
       const fileContent = await readFileContent(
-        join(baseDir, rootDirPath, paths.root.relativeFilePath),
+        join(outputRoot, rootDirPath, paths.root.relativeFilePath),
       );
 
       return new ClaudecodeRule({
-        baseDir,
+        outputRoot,
         relativeDirPath: rootDirPath,
         relativeFilePath: paths.root.relativeFilePath,
         frontmatter: {},
@@ -165,7 +176,7 @@ export class ClaudecodeRule extends ToolRule {
     }
 
     const relativePath = join(paths.nonRoot.relativeDirPath, relativeFilePath);
-    const filePath = join(baseDir, relativePath);
+    const filePath = join(outputRoot, relativePath);
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
 
@@ -176,7 +187,7 @@ export class ClaudecodeRule extends ToolRule {
     }
 
     return new ClaudecodeRule({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.nonRoot.relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -187,7 +198,7 @@ export class ClaudecodeRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
     global = false,
@@ -196,7 +207,7 @@ export class ClaudecodeRule extends ToolRule {
     const isRoot = relativeFilePath === paths.root.relativeFilePath;
 
     return new ClaudecodeRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: {},
@@ -207,7 +218,7 @@ export class ClaudecodeRule extends ToolRule {
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
     global = false,
@@ -232,7 +243,7 @@ export class ClaudecodeRule extends ToolRule {
 
     if (root) {
       return new ClaudecodeRule({
-        baseDir,
+        outputRoot,
         frontmatter: claudecodeFrontmatter,
         body,
         relativeDirPath: paths.root.relativeDirPath,
@@ -245,7 +256,7 @@ export class ClaudecodeRule extends ToolRule {
     // Reference files go to .claude/references/ instead of .claude/rules/
     if (isReference && "reference" in paths && paths.reference) {
       return new ClaudecodeRule({
-        baseDir,
+        outputRoot,
         frontmatter: claudecodeFrontmatter,
         body,
         relativeDirPath: paths.reference.relativeDirPath,
@@ -261,7 +272,7 @@ export class ClaudecodeRule extends ToolRule {
     }
 
     return new ClaudecodeRule({
-      baseDir,
+      outputRoot,
       frontmatter: claudecodeFrontmatter,
       body,
       relativeDirPath: paths.nonRoot.relativeDirPath,
@@ -292,7 +303,7 @@ export class ClaudecodeRule extends ToolRule {
     };
 
     return new RulesyncRule({
-      baseDir: this.getBaseDir(),
+      outputRoot: this.getOutputRoot(),
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,

@@ -3,11 +3,13 @@ import { join } from "node:path";
 import { intersection } from "es-toolkit";
 
 import { Config } from "../config/config.js";
+import { AGENTSMD_RULE_FILE_NAME } from "../constants/agentsmd-paths.js";
 import { RULESYNC_RELATIVE_DIR_PATH } from "../constants/rulesync-paths.js";
 import { CommandsProcessor } from "../features/commands/commands-processor.js";
 import { HooksProcessor } from "../features/hooks/hooks-processor.js";
 import { IgnoreProcessor } from "../features/ignore/ignore-processor.js";
 import { McpProcessor } from "../features/mcp/mcp-processor.js";
+import { PermissionsProcessor } from "../features/permissions/permissions-processor.js";
 import { RulesProcessor } from "../features/rules/rules-processor.js";
 import { RulesyncSkill } from "../features/skills/rulesync-skill.js";
 import { SkillsProcessor } from "../features/skills/skills-processor.js";
@@ -17,10 +19,11 @@ import { AiFile } from "../types/ai-file.js";
 import { DirFeatureProcessor } from "../types/dir-feature-processor.js";
 import { FeatureProcessor } from "../types/feature-processor.js";
 import type { Feature } from "../types/features.js";
+import type { RulesyncFile } from "../types/rulesync-file.js";
 import type { ToolTarget } from "../types/tool-targets.js";
 import { formatError } from "../utils/error.js";
-import { fileExists } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
+import { fileExists, toPosixPath } from "../utils/file.js";
+import type { Logger } from "../utils/logger.js";
 import type { FeatureGenerateResult } from "../utils/result.js";
 
 export type GenerateResult = {
@@ -38,6 +41,8 @@ export type GenerateResult = {
   skillsPaths: string[];
   hooksCount: number;
   hooksPaths: string[];
+  permissionsCount: number;
+  permissionsPaths: string[];
   skills: RulesyncSkill[];
   hasDiff: boolean;
 };
@@ -46,20 +51,27 @@ async function processFeatureGeneration<T extends AiFile>(params: {
   config: Config;
   processor: FeatureProcessor;
   toolFiles: T[];
+  skipFilePaths?: Set<string>;
 }): Promise<FeatureGenerateResult> {
-  const { config, processor, toolFiles } = params;
+  const { config, processor, toolFiles, skipFilePaths } = params;
+
+  const filesToCheck =
+    skipFilePaths && skipFilePaths.size > 0
+      ? toolFiles.filter((f) => !skipFilePaths.has(f.getRelativePathFromCwd()))
+      : toolFiles;
 
   let totalCount = 0;
   const allPaths: string[] = [];
   let hasDiff = false;
 
-  const writeResult = await processor.writeAiFiles(toolFiles);
+  const writeResult = await processor.writeAiFiles(filesToCheck);
   totalCount += writeResult.count;
   allPaths.push(...writeResult.paths);
   if (writeResult.count > 0) hasDiff = true;
 
   if (config.getDelete()) {
     const existingToolFiles = await processor.loadToolFiles({ forDeletion: true });
+
     const orphanCount = await processor.removeOrphanAiFiles(existingToolFiles, toolFiles);
     if (orphanCount > 0) hasDiff = true;
   }
@@ -85,6 +97,7 @@ async function processDirFeatureGeneration(params: {
 
   if (config.getDelete()) {
     const existingToolDirs = await processor.loadToolDirsToDelete();
+
     const orphanCount = await processor.removeOrphanAiDirs(existingToolDirs, toolDirs);
     if (orphanCount > 0) hasDiff = true;
   }
@@ -96,55 +109,114 @@ async function processDirFeatureGeneration(params: {
 async function processEmptyFeatureGeneration(params: {
   config: Config;
   processor: FeatureProcessor;
+  skipFilePaths?: Set<string>;
 }): Promise<FeatureGenerateResult> {
-  const { config, processor } = params;
+  const { config, processor, skipFilePaths } = params;
 
   const totalCount = 0;
   let hasDiff = false;
 
   if (config.getDelete()) {
     const existingToolFiles = await processor.loadToolFiles({ forDeletion: true });
-    const orphanCount = await processor.removeOrphanAiFiles(existingToolFiles, []);
+
+    const filesToDelete =
+      skipFilePaths && skipFilePaths.size > 0
+        ? existingToolFiles.filter((f) => !skipFilePaths.has(f.getRelativePathFromCwd()))
+        : existingToolFiles;
+
+    const orphanCount = await processor.removeOrphanAiFiles(filesToDelete, []);
     if (orphanCount > 0) hasDiff = true;
   }
 
   return { count: totalCount, paths: [], hasDiff };
 }
 
+/**
+ * Dispatch to processEmptyFeatureGeneration or processFeatureGeneration
+ * based on whether rulesync files exist.
+ */
+async function processFeatureWithRulesyncFiles(params: {
+  config: Config;
+  processor: FeatureProcessor;
+  rulesyncFiles: RulesyncFile[];
+  skipFilePaths?: Set<string>;
+}): Promise<FeatureGenerateResult> {
+  const { config, processor, rulesyncFiles, skipFilePaths } = params;
+  if (rulesyncFiles.length === 0) {
+    return processEmptyFeatureGeneration({ config, processor, skipFilePaths });
+  }
+  const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
+  return processFeatureGeneration({ config, processor, toolFiles, skipFilePaths });
+}
+
+const SIMULATE_OPTION_MAP: Partial<Record<Feature, string>> = {
+  commands: "--simulate-commands",
+  subagents: "--simulate-subagents",
+  skills: "--simulate-skills",
+};
+
 function warnUnsupportedTargets(params: {
   config: Config;
   supportedTargets: ToolTarget[];
+  simulatedTargets?: ToolTarget[];
   featureName: Feature;
+  logger: Logger;
 }): void {
-  const { config, supportedTargets, featureName } = params;
+  const { config, supportedTargets, simulatedTargets = [], featureName, logger } = params;
   for (const target of config.getTargets()) {
     if (!supportedTargets.includes(target) && config.getFeatures(target).includes(featureName)) {
-      logger.warn(`Target '${target}' does not support the feature '${featureName}'. Skipping.`);
+      const simulateOption = SIMULATE_OPTION_MAP[featureName];
+      if (simulateOption && simulatedTargets.includes(target)) {
+        logger.warn(
+          `Target '${target}' only supports simulated '${featureName}'. Use '${simulateOption}' to enable it. Skipping.`,
+        );
+      } else {
+        logger.warn(`Target '${target}' does not support the feature '${featureName}'. Skipping.`);
+      }
     }
   }
 }
 
 /**
  * Check if .rulesync directory exists.
+ *
+ * The `.rulesync/` directory lives under the *input* root (where source rules
+ * are read from), not under any individual output root, so callers always pass
+ * `config.getInputRoot()` here.
  */
-export async function checkRulesyncDirExists(params: { baseDir: string }): Promise<boolean> {
-  return fileExists(join(params.baseDir, RULESYNC_RELATIVE_DIR_PATH));
+export async function checkRulesyncDirExists(params: { inputRoot: string }): Promise<boolean> {
+  return fileExists(join(params.inputRoot, RULESYNC_RELATIVE_DIR_PATH));
 }
 
 /**
  * Generate configuration files for AI tools.
  * @throws Error if generation fails
  */
-export async function generate(params: { config: Config }): Promise<GenerateResult> {
-  const { config } = params;
+export async function generate(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<GenerateResult> {
+  const { config, logger } = params;
 
-  const ignoreResult = await generateIgnoreCore({ config });
-  const mcpResult = await generateMcpCore({ config });
-  const commandsResult = await generateCommandsCore({ config });
-  const subagentsResult = await generateSubagentsCore({ config });
-  const skillsResult = await generateSkillsCore({ config });
-  const hooksResult = await generateHooksCore({ config });
-  const rulesResult = await generateRulesCore({ config, skills: skillsResult.skills });
+  const ignoreResult = await generateIgnoreCore({ config, logger });
+  // NOTE: For Kilo, MCP MUST run before Rules. Both features merge into the
+  // shared `kilo.jsonc` (mcp writes the `mcp`/`tools` keys, rules writes the
+  // `instructions` key). Each reads the existing file from disk and preserves
+  // the other's keys, so running mcp first lets the rules write see the freshly
+  // written `mcp` block. Reordering or parallelizing these calls would drop one
+  // of the two keys.
+  const mcpResult = await generateMcpCore({ config, logger });
+
+  const commandsResult = await generateCommandsCore({ config, logger });
+  const subagentsResult = await generateSubagentsCore({ config, logger });
+  const skillsResult = await generateSkillsCore({ config, logger });
+  const hooksResult = await generateHooksCore({ config, logger });
+  // NOTE: Permissions MUST run after ignore. Both features write to `.claude/settings.json`
+  // (ignore writes Read deny entries, permissions merges all permission arrays).
+  // Permissions reads the file written by ignore and preserves non-managed entries.
+  // Changing this order or parallelizing these calls will cause data loss.
+  const permissionsResult = await generatePermissionsCore({ config, logger });
+  const rulesResult = await generateRulesCore({ config, logger, skills: skillsResult.skills });
 
   const hasDiff =
     ignoreResult.hasDiff ||
@@ -153,6 +225,7 @@ export async function generate(params: { config: Config }): Promise<GenerateResu
     subagentsResult.hasDiff ||
     skillsResult.hasDiff ||
     hooksResult.hasDiff ||
+    permissionsResult.hasDiff ||
     rulesResult.hasDiff;
 
   return {
@@ -170,16 +243,70 @@ export async function generate(params: { config: Config }): Promise<GenerateResu
     skillsPaths: skillsResult.paths,
     hooksCount: hooksResult.count,
     hooksPaths: hooksResult.paths,
+    permissionsCount: permissionsResult.count,
+    permissionsPaths: permissionsResult.paths,
     skills: skillsResult.skills,
     hasDiff,
   };
 }
 
+// Maps every root-rule file path a target actually emits to that target, so
+// `generate --check` can skip root files a (CLI-selected) target does not own.
+//
+// Ownership is "last target in config order wins": the loop iterates the config
+// file's full target list and `Map.set` overwrites, so the final writer in
+// config order owns a shared path — consistent with generation write order,
+// where the last target's content is what ends up on disk.
+//
+// Note: a single ownership decision is applied uniformly across all output
+// roots (paths are output-root-relative). Multi-output-root `--check` would
+// need per-output-root keying; that is out of scope here.
+function computeRootFileOwnership(params: {
+  targets: ToolTarget[];
+  global: boolean;
+}): Map<string, ToolTarget> {
+  const ownerByPath = new Map<string, ToolTarget>();
+  const register = (
+    relativeDirPath: string,
+    relativeFilePath: string,
+    target: ToolTarget,
+  ): void => {
+    ownerByPath.set(toPosixPath(join(relativeDirPath, relativeFilePath)), target);
+  };
+  for (const target of params.targets) {
+    const factory = RulesProcessor.getFactory(target);
+    if (!factory) continue;
+    const paths = factory.class.getSettablePaths({ global: params.global });
+    if ("root" in paths && paths.root) {
+      register(paths.root.relativeDirPath, paths.root.relativeFilePath, target);
+    }
+    // Secondary/fallback root locations a target recognizes are attributed to
+    // it as well, so a shared collision at one of those paths is skipped for
+    // non-owning targets.
+    if ("alternativeRoots" in paths && paths.alternativeRoots) {
+      for (const alt of paths.alternativeRoots) {
+        register(alt.relativeDirPath, alt.relativeFilePath, target);
+      }
+    }
+    // Some targets (e.g. rovodev) mirror their primary root — which lives in a
+    // subdirectory — to a project-root `./AGENTS.md` at generation time (project
+    // scope only). That mirror is exactly the shared-collision path, so it must
+    // be attributed to the target too, otherwise ownership/skip decisions invert.
+    // (For rovodev this overlaps its `alternativeRoots` today; the explicit
+    // block keeps ownership correct even if that alt root is ever removed.)
+    if (!params.global && factory.meta.mirrorsRootToAgentsMd) {
+      register(".", AGENTSMD_RULE_FILE_NAME, target);
+    }
+  }
+  return ownerByPath;
+}
+
 async function generateRulesCore(params: {
   config: Config;
+  logger: Logger;
   skills?: RulesyncSkill[];
 }): Promise<FeatureGenerateResult> {
-  const { config, skills } = params;
+  const { config, logger, skills } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -187,9 +314,17 @@ async function generateRulesCore(params: {
 
   const supportedTargets = RulesProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedTargets);
-  warnUnsupportedTargets({ config, supportedTargets, featureName: "rules" });
+  warnUnsupportedTargets({ config, supportedTargets, featureName: "rules", logger });
 
-  for (const baseDir of config.getBaseDirs()) {
+  const isCheck = config.getCheck();
+  const rootFileOwner = isCheck
+    ? computeRootFileOwnership({
+        targets: config.getConfigFileTargets(),
+        global: config.getGlobal(),
+      })
+    : new Map<string, ToolTarget>();
+
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if rules feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("rules")) {
@@ -197,23 +332,35 @@ async function generateRulesCore(params: {
       }
 
       const processor = new RulesProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         simulateCommands: config.getSimulateCommands(),
         simulateSubagents: config.getSimulateSubagents(),
         simulateSkills: config.getSimulateSkills(),
         skills: skills,
+        featureOptions: config.getFeatureOptions(toolTarget, "rules"),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
 
-      const result = await processFeatureGeneration({
+      const skipFilePaths = new Set<string>();
+      if (isCheck) {
+        for (const [rootPath, owner] of rootFileOwner) {
+          if (owner !== toolTarget) {
+            skipFilePaths.add(rootPath);
+          }
+        }
+      }
+
+      const result = await processFeatureWithRulesyncFiles({
         config,
         processor,
-        toolFiles,
+        rulesyncFiles,
+        skipFilePaths: skipFilePaths.size > 0 ? skipFilePaths : undefined,
       });
 
       totalCount += result.count;
@@ -225,14 +372,18 @@ async function generateRulesCore(params: {
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateIgnoreCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   const supportedIgnoreTargets = IgnoreProcessor.getToolTargets();
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedIgnoreTargets,
     featureName: "ignore",
+    logger,
   });
 
   if (config.getGlobal()) {
@@ -249,37 +400,31 @@ async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGe
       continue;
     }
 
-    for (const baseDir of config.getBaseDirs()) {
+    for (const outputRoot of config.getOutputRoots()) {
       try {
         const processor = new IgnoreProcessor({
-          baseDir: baseDir === process.cwd() ? "." : baseDir,
+          // Pass `outputRoot` verbatim. The legacy
+          // `outputRoot === process.cwd() ? "." : outputRoot` heuristic was a
+          // leftover from before `outputRoots` was always resolved to absolute
+          // paths in `ConfigResolver`; with that change it is now consistent
+          // to pass the same `outputRoot` value the other processors receive.
+          outputRoot,
+          inputRoot: config.getInputRoot(),
           toolTarget,
           dryRun: config.isPreviewMode(),
+          logger,
+          featureOptions: config.getFeatureOptions(toolTarget, "ignore"),
         });
 
         const rulesyncFiles = await processor.loadRulesyncFiles();
-        let result;
-
-        if (rulesyncFiles.length > 0) {
-          const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-          result = await processFeatureGeneration({
-            config,
-            processor,
-            toolFiles,
-          });
-        } else {
-          result = await processEmptyFeatureGeneration({
-            config,
-            processor,
-          });
-        }
+        const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
         totalCount += result.count;
         allPaths.push(...result.paths);
         if (result.hasDiff) hasDiff = true;
       } catch (error) {
         logger.warn(
-          `Failed to generate ${toolTarget} ignore files for ${baseDir}: ${formatError(error)}`,
+          `Failed to generate ${toolTarget} ignore files for ${outputRoot}: ${formatError(error)}`,
         );
         continue;
       }
@@ -289,8 +434,11 @@ async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGe
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateMcpCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateMcpCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -298,9 +446,14 @@ async function generateMcpCore(params: { config: Config }): Promise<FeatureGener
 
   const supportedMcpTargets = McpProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedMcpTargets);
-  warnUnsupportedTargets({ config, supportedTargets: supportedMcpTargets, featureName: "mcp" });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedMcpTargets,
+    featureName: "mcp",
+    logger,
+  });
 
-  for (const baseDir of config.getBaseDirs()) {
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if mcp feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("mcp")) {
@@ -308,20 +461,16 @@ async function generateMcpCore(params: { config: Config }): Promise<FeatureGener
       }
 
       const processor = new McpProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-
-      const result = await processFeatureGeneration({
-        config,
-        processor,
-        toolFiles,
-      });
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
@@ -332,8 +481,11 @@ async function generateMcpCore(params: { config: Config }): Promise<FeatureGener
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateCommandsCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateCommandsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -347,10 +499,12 @@ async function generateCommandsCore(params: { config: Config }): Promise<Feature
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedCommandsTargets,
+    simulatedTargets: CommandsProcessor.getToolTargetsSimulated(),
     featureName: "commands",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if commands feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("commands")) {
@@ -358,19 +512,20 @@ async function generateCommandsCore(params: { config: Config }): Promise<Feature
       }
 
       const processor = new CommandsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
 
-      const result = await processFeatureGeneration({
+      const result = await processFeatureWithRulesyncFiles({
         config,
         processor,
-        toolFiles,
+        rulesyncFiles,
       });
 
       totalCount += result.count;
@@ -382,8 +537,11 @@ async function generateCommandsCore(params: { config: Config }): Promise<Feature
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateSubagentsCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateSubagentsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -397,10 +555,12 @@ async function generateSubagentsCore(params: { config: Config }): Promise<Featur
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedSubagentsTargets,
+    simulatedTargets: SubagentsProcessor.getToolTargetsSimulated(),
     featureName: "subagents",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if subagents feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("subagents")) {
@@ -408,20 +568,16 @@ async function generateSubagentsCore(params: { config: Config }): Promise<Featur
       }
 
       const processor = new SubagentsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-
-      const result = await processFeatureGeneration({
-        config,
-        processor,
-        toolFiles,
-      });
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
@@ -434,8 +590,9 @@ async function generateSubagentsCore(params: { config: Config }): Promise<Featur
 
 async function generateSkillsCore(params: {
   config: Config;
+  logger: Logger;
 }): Promise<FeatureGenerateResult & { skills: RulesyncSkill[] }> {
-  const { config } = params;
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -450,10 +607,12 @@ async function generateSkillsCore(params: {
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedSkillsTargets,
+    simulatedTargets: SkillsProcessor.getToolTargetsSimulated(),
     featureName: "skills",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if skills feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("skills")) {
@@ -461,10 +620,12 @@ async function generateSkillsCore(params: {
       }
 
       const processor = new SkillsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncDirs = await processor.loadRulesyncDirs();
@@ -492,8 +653,11 @@ async function generateSkillsCore(params: {
   return { count: totalCount, paths: allPaths, skills: allSkills, hasDiff };
 }
 
-async function generateHooksCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateHooksCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -501,9 +665,14 @@ async function generateHooksCore(params: { config: Config }): Promise<FeatureGen
 
   const supportedHooksTargets = HooksProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedHooksTargets);
-  warnUnsupportedTargets({ config, supportedTargets: supportedHooksTargets, featureName: "hooks" });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedHooksTargets,
+    featureName: "hooks",
+    logger,
+  });
 
-  for (const baseDir of config.getBaseDirs()) {
+  for (const outputRoot of config.getOutputRoots()) {
     for (const toolTarget of toolTargets) {
       // Check if hooks feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("hooks")) {
@@ -511,32 +680,74 @@ async function generateHooksCore(params: { config: Config }): Promise<FeatureGen
       }
 
       const processor = new HooksProcessor({
-        baseDir,
+        outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      let result;
-
-      if (rulesyncFiles.length === 0) {
-        result = await processEmptyFeatureGeneration({
-          config,
-          processor,
-        });
-      } else {
-        const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-        result = await processFeatureGeneration({
-          config,
-          processor,
-          toolFiles,
-        });
-      }
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
       if (result.hasDiff) hasDiff = true;
+    }
+  }
+
+  return { count: totalCount, paths: allPaths, hasDiff };
+}
+
+async function generatePermissionsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
+
+  const supportedPermissionsTargets = PermissionsProcessor.getToolTargets({
+    global: config.getGlobal(),
+  });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedPermissionsTargets,
+    featureName: "permissions",
+    logger,
+  });
+
+  let totalCount = 0;
+  const allPaths: string[] = [];
+  let hasDiff = false;
+
+  for (const outputRoot of config.getOutputRoots()) {
+    for (const toolTarget of intersection(config.getTargets(), supportedPermissionsTargets)) {
+      if (!config.getFeatures(toolTarget).includes("permissions")) {
+        continue;
+      }
+
+      try {
+        const processor = new PermissionsProcessor({
+          outputRoot,
+          inputRoot: config.getInputRoot(),
+          toolTarget,
+          global: config.getGlobal(),
+          dryRun: config.isPreviewMode(),
+          logger,
+        });
+
+        const rulesyncFiles = await processor.loadRulesyncFiles();
+        const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
+
+        totalCount += result.count;
+        allPaths.push(...result.paths);
+        if (result.hasDiff) hasDiff = true;
+      } catch (error) {
+        logger.warn(
+          `Failed to generate ${toolTarget} permissions files for ${outputRoot}: ${formatError(error)}`,
+        );
+        continue;
+      }
     }
   }
 

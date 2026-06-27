@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { fileContentsEquivalent } from "../utils/content-equivalence.js";
 import {
   addTrailingNewline,
   ensureDir,
@@ -8,18 +9,36 @@ import {
   writeFileContent,
 } from "../utils/file.js";
 import { stringifyFrontmatter } from "../utils/frontmatter.js";
-import { logger } from "../utils/logger.js";
+import type { Logger } from "../utils/logger.js";
 import type { WriteResult } from "../utils/result.js";
 import { AiDir, AiDirFile } from "./ai-dir.js";
 import { ToolTarget } from "./tool-targets.js";
 
 export abstract class DirFeatureProcessor {
-  protected readonly baseDir: string;
+  protected readonly outputRoot: string;
+  protected readonly inputRoot: string;
   protected readonly dryRun: boolean;
+  protected readonly avoidBlockScalars: boolean;
+  protected readonly logger: Logger;
 
-  constructor({ baseDir = process.cwd(), dryRun = false }: { baseDir?: string; dryRun?: boolean }) {
-    this.baseDir = baseDir;
+  constructor({
+    outputRoot = process.cwd(),
+    inputRoot = process.cwd(),
+    dryRun = false,
+    avoidBlockScalars = false,
+    logger,
+  }: {
+    outputRoot?: string;
+    inputRoot?: string;
+    dryRun?: boolean;
+    avoidBlockScalars?: boolean;
+    logger: Logger;
+  }) {
+    this.outputRoot = outputRoot;
+    this.inputRoot = inputRoot;
     this.dryRun = dryRun;
+    this.avoidBlockScalars = avoidBlockScalars;
+    this.logger = logger;
   }
 
   abstract loadRulesyncDirs(): Promise<AiDir[]>;
@@ -61,10 +80,18 @@ export abstract class DirFeatureProcessor {
       let mainFileContent: string | undefined;
       if (mainFile) {
         const mainFilePath = join(dirPath, mainFile.name);
-        const content = stringifyFrontmatter(mainFile.body, mainFile.frontmatter);
+        const content = stringifyFrontmatter(mainFile.body, mainFile.frontmatter, {
+          avoidBlockScalars: this.avoidBlockScalars,
+        });
         mainFileContent = addTrailingNewline(content);
         const existingContent = await readFileContentOrNull(mainFilePath);
-        if (existingContent !== mainFileContent) {
+        if (
+          !fileContentsEquivalent({
+            filePath: mainFilePath,
+            expected: mainFileContent,
+            existing: existingContent,
+          })
+        ) {
           dirHasChanges = true;
         }
       }
@@ -78,7 +105,13 @@ export abstract class DirFeatureProcessor {
         if (!dirHasChanges) {
           const filePath = join(dirPath, file.relativeFilePathToDirPath);
           const existingContent = await readFileContentOrNull(filePath);
-          if (existingContent !== contentWithNewline) {
+          if (
+            !fileContentsEquivalent({
+              filePath,
+              expected: contentWithNewline,
+              existing: existingContent,
+            })
+          ) {
             dirHasChanges = true;
           }
         }
@@ -90,13 +123,15 @@ export abstract class DirFeatureProcessor {
 
       const relativeDir = aiDir.getRelativePathFromCwd();
       if (this.dryRun) {
-        logger.info(`[DRY RUN] Would create directory: ${dirPath}`);
+        this.logger.info(`[DRY RUN] Would create directory: ${dirPath}`);
         if (mainFile) {
-          logger.info(`[DRY RUN] Would write: ${join(dirPath, mainFile.name)}`);
+          this.logger.info(`[DRY RUN] Would write: ${join(dirPath, mainFile.name)}`);
           changedPaths.push(join(relativeDir, mainFile.name));
         }
         for (const file of otherFiles) {
-          logger.info(`[DRY RUN] Would write: ${join(dirPath, file.relativeFilePathToDirPath)}`);
+          this.logger.info(
+            `[DRY RUN] Would write: ${join(dirPath, file.relativeFilePathToDirPath)}`,
+          );
           changedPaths.push(join(relativeDir, file.relativeFilePathToDirPath));
         }
       } else {
@@ -147,7 +182,7 @@ export abstract class DirFeatureProcessor {
     for (const aiDir of orphanDirs) {
       const dirPath = aiDir.getDirPath();
       if (this.dryRun) {
-        logger.info(`[DRY RUN] Would delete directory: ${dirPath}`);
+        this.logger.info(`[DRY RUN] Would delete directory: ${dirPath}`);
       } else {
         await removeDirectory(dirPath);
       }

@@ -25,34 +25,74 @@ export const RulesyncRuleFrontmatterSchema = z.object({
   description: z.optional(z.string()),
   globs: z.optional(z.array(z.string())),
   agentsmd: z.optional(
-    z.object({
+    z.looseObject({
       // @example "path/to/subproject"
       subprojectPath: z.optional(z.string()),
     }),
   ),
   claudecode: z.optional(
-    z.object({
+    z.looseObject({
       // Glob patterns for conditional rules (takes precedence over globs)
       // @example ["src/**/*.ts", "tests/**/*.test.ts"]
       paths: z.optional(z.array(z.string())),
     }),
   ),
   cursor: z.optional(
-    z.object({
+    z.looseObject({
       alwaysApply: z.optional(z.boolean()),
       description: z.optional(z.string()),
       globs: z.optional(z.array(z.string())),
     }),
   ),
   copilot: z.optional(
-    z.object({
-      excludeAgent: z.optional(z.union([z.literal("code-review"), z.literal("coding-agent")])),
+    z.looseObject({
+      // `cloud-agent` is the current documented value; `coding-agent` is a deprecated alias.
+      excludeAgent: z.optional(
+        z.union([z.literal("code-review"), z.literal("cloud-agent"), z.literal("coding-agent")]),
+      ),
     }),
   ),
   antigravity: z.optional(
     z.looseObject({
       trigger: z.optional(z.string()),
       globs: z.optional(z.array(z.string())),
+    }),
+  ),
+  devin: z.optional(
+    z.looseObject({
+      // Activation mode: always_on | glob | manual | model_decision
+      trigger: z.optional(z.string()),
+      globs: z.optional(z.array(z.string())),
+      description: z.optional(z.string()),
+    }),
+  ),
+  augmentcode: z.optional(
+    z.looseObject({
+      type: z.optional(z.string()),
+      description: z.optional(z.string()),
+    }),
+  ),
+  kiro: z.optional(
+    z.looseObject({
+      // Steering inclusion mode: always | fileMatch | manual (string for forward compat).
+      inclusion: z.optional(z.string()),
+      // Glob(s) used when `inclusion: fileMatch`. Kiro accepts a single string or
+      // a YAML array of globs.
+      fileMatchPattern: z.optional(z.union([z.string(), z.array(z.string())])),
+    }),
+  ),
+  takt: z.optional(
+    z.looseObject({
+      // Rename the emitted file stem (e.g. "coder.md" → "{name}.md").
+      name: z.optional(z.string()),
+      // Facet inheritance: emit a leading `{extends:<parent>}` directive (Takt 0.39.0+).
+      // Rules map to the `policies` facet, which supports inheritance.
+      extends: z.optional(z.string()),
+      // Redirect the rule to a different writable Takt facet. Rules default to the
+      // `policies` facet; set `facet: "output-contracts"` to author an output-contract
+      // facet (output structure / report templates) instead. Both facets support
+      // `{extends:...}` inheritance. See docs/reference/file-formats.md.
+      facet: z.optional(z.enum(["policies", "output-contracts"])),
     }),
   ),
 });
@@ -138,18 +178,29 @@ export class RulesyncRule extends RulesyncFile {
   }
 
   static async fromFile({
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: RulesyncFileFromFileParams): Promise<RulesyncRule> {
     const filePath = join(
-      process.cwd(),
+      outputRoot,
       this.getSettablePaths().recommended.relativeDirPath,
       relativeFilePath,
     );
 
     // Read file content
     const fileContent = await readFileContent(filePath);
-    const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
+    const { frontmatter, body: content, hasFrontmatter } = parseFrontmatter(fileContent, filePath);
+
+    // Check that the file actually contains a YAML frontmatter block.
+    // Without this check, a file without frontmatter would be silently accepted
+    // with default values (targets: ["*"], root: false, etc.), which is almost
+    // certainly not what the user intended. See issue #316.
+    if (!hasFrontmatter) {
+      throw new Error(
+        `Missing frontmatter in ${filePath}. Rulesync files must begin with a YAML frontmatter block delimited by '---'.`,
+      );
+    }
 
     // Validate frontmatter using RuleFrontmatterSchema
     const result = RulesyncRuleFrontmatterSchema.safeParse(frontmatter);
@@ -158,18 +209,14 @@ export class RulesyncRule extends RulesyncFile {
     }
 
     const validatedFrontmatter: RulesyncRuleFrontmatter = {
+      ...result.data,
       root: result.data.root ?? false,
       localRoot: result.data.localRoot ?? false,
-      targets: result.data.targets ?? ["*"],
-      description: result.data.description,
       globs: result.data.globs ?? [],
-      agentsmd: result.data.agentsmd,
-      cursor: result.data.cursor,
-      reference: result.data.reference,
     };
 
     return new RulesyncRule({
-      baseDir: process.cwd(),
+      outputRoot,
       relativeDirPath: this.getSettablePaths().recommended.relativeDirPath,
       relativeFilePath,
       frontmatter: validatedFrontmatter,

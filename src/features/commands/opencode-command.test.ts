@@ -28,8 +28,8 @@ describe("OpenCodeCommand", () => {
   describe("constructor", () => {
     it("should create a command with optional OpenCode fields", () => {
       const command = new OpenCodeCommand({
-        baseDir: testDir,
-        relativeDirPath: join(".opencode", "command"),
+        outputRoot: testDir,
+        relativeDirPath: join(".opencode", "commands"),
         relativeFilePath: "test.md",
         frontmatter: {
           description: "Run tests",
@@ -52,8 +52,8 @@ describe("OpenCodeCommand", () => {
     it("should validate frontmatter when enabled", () => {
       expect(() => {
         new OpenCodeCommand({
-          baseDir: testDir,
-          relativeDirPath: join(".opencode", "command"),
+          outputRoot: testDir,
+          relativeDirPath: join(".opencode", "commands"),
           relativeFilePath: "invalid.md",
           frontmatter: { description: 123 as unknown as string },
           body: "content",
@@ -66,10 +66,10 @@ describe("OpenCodeCommand", () => {
   describe("getSettablePaths", () => {
     it("should return project and global paths", () => {
       expect(OpenCodeCommand.getSettablePaths()).toEqual({
-        relativeDirPath: join(".opencode", "command"),
+        relativeDirPath: join(".opencode", "commands"),
       });
       expect(OpenCodeCommand.getSettablePaths({ global: true })).toEqual({
-        relativeDirPath: join(".config", "opencode", "command"),
+        relativeDirPath: join(".config", "opencode", "commands"),
       });
     });
   });
@@ -77,7 +77,7 @@ describe("OpenCodeCommand", () => {
   describe("fromRulesyncCommand", () => {
     it("should merge opencode frontmatter fields and respect global paths", () => {
       const rulesyncCommand = new RulesyncCommand({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
         relativeFilePath: "custom.md",
         frontmatter: {
@@ -94,21 +94,21 @@ describe("OpenCodeCommand", () => {
       });
 
       const command = OpenCodeCommand.fromRulesyncCommand({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncCommand,
         global: true,
       });
 
       expect(command.getFrontmatter()).toEqual({ description: "Analyze coverage", subtask: true });
-      expect(command.getRelativeDirPath()).toBe(join(".config", "opencode", "command"));
+      expect(command.getRelativeDirPath()).toBe(join(".config", "opencode", "commands"));
     });
   });
 
   describe("toRulesyncCommand", () => {
     it("should convert to RulesyncCommand with opencode metadata", () => {
       const command = new OpenCodeCommand({
-        baseDir: testDir,
-        relativeDirPath: join(".opencode", "command"),
+        outputRoot: testDir,
+        relativeDirPath: join(".opencode", "commands"),
         relativeFilePath: "custom.md",
         frontmatter: { description: "Create component", agent: "plan" },
         body: "Create a new component named $ARGUMENTS",
@@ -128,7 +128,7 @@ describe("OpenCodeCommand", () => {
 
   describe("fromFile", () => {
     it("should load a command file and parse frontmatter", async () => {
-      const commandDir = join(testDir, ".opencode", "command");
+      const commandDir = join(testDir, ".opencode", "commands");
       await ensureDir(commandDir);
       const filePath = join(commandDir, "task.md");
       await writeFileContent(
@@ -137,7 +137,7 @@ describe("OpenCodeCommand", () => {
       );
 
       const command = await OpenCodeCommand.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "task.md",
       });
 
@@ -146,6 +146,83 @@ describe("OpenCodeCommand", () => {
         true,
       );
       expect(command.getBody()).toBe("Check @src/components/Button.tsx");
+    });
+  });
+
+  describe("loadAdditionalImportFiles", () => {
+    it("imports inline commands from opencode.json", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({
+          command: {
+            test: {
+              template: "Run the full suite for $ARGUMENTS",
+              description: "Run tests",
+              agent: "build",
+              model: "anthropic/claude-3-5-sonnet-20241022",
+              subtask: true,
+            },
+          },
+        }),
+      );
+
+      const commands = await OpenCodeCommand.loadAdditionalImportFiles({ outputRoot: testDir });
+
+      expect(commands).toHaveLength(1);
+      const [command] = commands;
+      expect(command).toBeInstanceOf(OpenCodeCommand);
+      expect(command?.getRelativeFilePath()).toBe("test.md");
+      expect(command?.getBody()).toBe("Run the full suite for $ARGUMENTS");
+      expect(command?.getFrontmatter()).toEqual({
+        description: "Run tests",
+        agent: "build",
+        model: "anthropic/claude-3-5-sonnet-20241022",
+        subtask: true,
+      });
+    });
+
+    it("prefers opencode.jsonc over opencode.json", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.jsonc"),
+        '{\n  // inline command\n  "command": { "fromJsonc": { "template": "jsonc body" } }\n}',
+      );
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ command: { fromJson: { template: "json body" } } }),
+      );
+
+      const commands = await OpenCodeCommand.loadAdditionalImportFiles({ outputRoot: testDir });
+
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.getRelativeFilePath()).toBe("fromJsonc.md");
+      expect(commands[0]?.getBody()).toBe("jsonc body");
+    });
+
+    it("returns an empty array when there is no command block", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ mcp: {}, agent: { foo: { prompt: "x" } } }),
+      );
+
+      expect(await OpenCodeCommand.loadAdditionalImportFiles({ outputRoot: testDir })).toEqual([]);
+    });
+
+    it("returns an empty array when no config file exists", async () => {
+      expect(await OpenCodeCommand.loadAdditionalImportFiles({ outputRoot: testDir })).toEqual([]);
+    });
+
+    it("round-trips an imported inline command into a RulesyncCommand", async () => {
+      await writeFileContent(
+        join(testDir, "opencode.json"),
+        JSON.stringify({ command: { deploy: { template: "Deploy now", description: "Deploy" } } }),
+      );
+
+      const [command] = await OpenCodeCommand.loadAdditionalImportFiles({ outputRoot: testDir });
+      const rulesyncCommand = command?.toRulesyncCommand();
+
+      expect(rulesyncCommand).toBeInstanceOf(RulesyncCommand);
+      expect(rulesyncCommand?.getBody()).toBe("Deploy now");
+      expect(rulesyncCommand?.getRelativeFilePath()).toBe("deploy.md");
     });
   });
 });

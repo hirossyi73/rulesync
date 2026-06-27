@@ -1,5 +1,10 @@
 import { join } from "node:path";
 
+import {
+  FACTORYDROID_DIR,
+  FACTORYDROID_HOOKS_FILE_NAME,
+  FACTORYDROID_SETTINGS_FILE_NAME,
+} from "../../constants/factorydroid-paths.js";
 import type { AiFileParams } from "../../types/ai-file.js";
 import type { ValidationResult } from "../../types/ai-file.js";
 import {
@@ -9,6 +14,7 @@ import {
 } from "../../types/hooks.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContentOrNull, readOrInitializeFileContent } from "../../utils/file.js";
+import type { Logger } from "../../utils/logger.js";
 import type { RulesyncHooks } from "./rulesync-hooks.js";
 import type { ToolHooksConverterConfig } from "./tool-hooks-converter.js";
 import { canonicalToToolHooks, toolHooksToCanonical } from "./tool-hooks-converter.js";
@@ -35,39 +41,55 @@ export class FactorydroidHooks extends ToolHooks {
     });
   }
 
-  override isDeletable(): boolean {
-    return false;
-  }
-
   static getSettablePaths(_options: { global?: boolean } = {}): ToolHooksSettablePaths {
-    return { relativeDirPath: ".factory", relativeFilePath: "settings.json" };
+    // Factory Droid's primary hooks file is `.factory/hooks.json` (project) and
+    // `~/.factory/hooks.json` (global). The home directory is resolved by the
+    // harness via outputRoot in global mode. The legacy `.factory/settings.json`
+    // `hooks` key is only a read-time fallback (see fromFile).
+    // https://docs.factory.ai/reference/hooks-reference
+    return { relativeDirPath: FACTORYDROID_DIR, relativeFilePath: FACTORYDROID_HOOKS_FILE_NAME };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
     global = false,
   }: ToolHooksFromFileParams): Promise<FactorydroidHooks> {
     const paths = FactorydroidHooks.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, paths.relativeFilePath);
-    const fileContent = (await readFileContentOrNull(filePath)) ?? '{"hooks":{}}';
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
+    // Prefer the dedicated `.factory/hooks.json`. When it is absent, fall back to
+    // the legacy `.factory/settings.json` `hooks` key for back-compat, since
+    // Droid itself falls back that way.
+    let fileContent = await readFileContentOrNull(filePath);
+    if (fileContent === null) {
+      const legacyFilePath = join(
+        outputRoot,
+        paths.relativeDirPath,
+        FACTORYDROID_SETTINGS_FILE_NAME,
+      );
+      fileContent = await readFileContentOrNull(legacyFilePath);
+    }
     return new FactorydroidHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
-      fileContent,
+      fileContent: fileContent ?? '{"hooks":{}}',
       validate,
     });
   }
 
   static async fromRulesyncHooks({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncHooks,
     validate = true,
     global = false,
-  }: ToolHooksFromRulesyncHooksParams & { global?: boolean }): Promise<FactorydroidHooks> {
+    logger,
+  }: ToolHooksFromRulesyncHooksParams & {
+    global?: boolean;
+    logger?: Logger;
+  }): Promise<FactorydroidHooks> {
     const paths = FactorydroidHooks.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, paths.relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
     const existingContent = await readOrInitializeFileContent(
       filePath,
       JSON.stringify({}, null, 2),
@@ -77,7 +99,7 @@ export class FactorydroidHooks extends ToolHooks {
       settings = JSON.parse(existingContent);
     } catch (error) {
       throw new Error(
-        `Failed to parse existing Factory Droid settings at ${filePath}: ${formatError(error)}`,
+        `Failed to parse existing Factory Droid hooks file at ${filePath}: ${formatError(error)}`,
         { cause: error },
       );
     }
@@ -86,11 +108,12 @@ export class FactorydroidHooks extends ToolHooks {
       config,
       toolOverrideHooks: config.factorydroid?.hooks,
       converterConfig: FACTORYDROID_CONVERTER_CONFIG,
+      logger,
     });
     const merged = { ...settings, hooks: factorydroidHooks };
     const fileContent = JSON.stringify(merged, null, 2);
     return new FactorydroidHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -124,12 +147,12 @@ export class FactorydroidHooks extends ToolHooks {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolHooksForDeletionParams): FactorydroidHooks {
     return new FactorydroidHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: JSON.stringify({ hooks: {} }, null, 2),

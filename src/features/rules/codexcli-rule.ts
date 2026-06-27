@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
-import { ValidationResult } from "../../types/ai-file.js";
+import { CODEXCLI_DIR, CODEXCLI_RULE_FILE_NAME } from "../../constants/codexcli-paths.js";
+import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncRule } from "./rulesync-rule.js";
 import {
@@ -9,113 +10,104 @@ import {
   ToolRuleFromFileParams,
   ToolRuleFromRulesyncRuleParams,
   ToolRuleSettablePaths,
-  ToolRuleSettablePathsGlobal,
   buildToolPath,
 } from "./tool-rule.js";
 
-export type CodexcliRuleSettablePaths = ToolRuleSettablePaths & {
+export type CodexcliRuleParams = AiFileParams & {
+  root?: boolean;
+  reference?: boolean;
+  description?: string | undefined;
+  globs?: string[] | undefined;
+};
+
+/**
+ * Rule generator for OpenAI Codex CLI.
+ *
+ * Codex CLI loads project instructions only from the `AGENTS.md` family — the
+ * global `~/.codex/AGENTS.md`, then hierarchical `AGENTS.md` / `AGENTS.override.md`
+ * files discovered by walking from the project root to the current working
+ * directory. It does NOT scan a `.codex/memories/` directory for instruction
+ * files — that directory belongs to Codex's separate SQLite-backed auto-memory
+ * system. (Verified against the official docs:
+ * https://developers.openai.com/codex/guides/agents-md)
+ *
+ * rulesync's topic-based non-root rules have no project subdirectory to map
+ * onto, so their bodies are folded into the single root `AGENTS.md` by the
+ * RulesProcessor; there is no separate non-root output location (`nonRoot` is
+ * `undefined`). This mirrors the grokcli, warp, and deepagents targets.
+ */
+export type CodexcliRuleSettablePaths = Pick<ToolRuleSettablePaths, "root"> & {
   root: {
     relativeDirPath: string;
     relativeFilePath: string;
   };
+  nonRoot?: undefined;
   reference: {
     relativeDirPath: string;
   };
 };
 
-export type CodexcliRuleSettablePathsGlobal = ToolRuleSettablePathsGlobal;
-
-/**
- * Rule generator for OpenAI Codex CLI
- *
- * Generates AGENTS.md files based on rulesync rule content.
- * Supports the OpenAI Codex CLI memory/instructions system with
- * hierarchical loading (global, project, directory-specific).
- */
 export class CodexcliRule extends ToolRule {
+  constructor({ fileContent, root, ...rest }: CodexcliRuleParams) {
+    super({
+      ...rest,
+      fileContent,
+      root: root ?? false,
+    });
+  }
+
   static getSettablePaths({
-    global,
+    global = false,
     excludeToolDir,
   }: {
     global?: boolean;
     excludeToolDir?: boolean;
-  } = {}): CodexcliRuleSettablePaths | CodexcliRuleSettablePathsGlobal {
-    if (global) {
-      return {
-        root: {
-          relativeDirPath: buildToolPath(".codex", ".", excludeToolDir),
-          relativeFilePath: "AGENTS.md",
-        },
-      };
-    }
+  } = {}): CodexcliRuleSettablePaths {
     return {
       root: {
-        relativeDirPath: ".",
-        relativeFilePath: "AGENTS.md",
-      },
-      nonRoot: {
-        relativeDirPath: buildToolPath(".codex", "memories", excludeToolDir),
+        relativeDirPath: global ? CODEXCLI_DIR : ".",
+        relativeFilePath: CODEXCLI_RULE_FILE_NAME,
       },
       reference: {
-        relativeDirPath: buildToolPath(".codex", "references", excludeToolDir),
+        relativeDirPath: buildToolPath(CODEXCLI_DIR, "references", excludeToolDir),
       },
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
-    relativeFilePath,
+    outputRoot = process.cwd(),
+    relativeFilePath: _relativeFilePath,
     validate = true,
     global = false,
   }: ToolRuleFromFileParams): Promise<CodexcliRule> {
-    const paths = this.getSettablePaths({ global });
-    const isRoot = relativeFilePath === paths.root.relativeFilePath;
+    const { root } = this.getSettablePaths({ global });
+    const relativePath = join(root.relativeDirPath, root.relativeFilePath);
+    const fileContent = await readFileContent(join(outputRoot, relativePath));
 
-    if (isRoot) {
-      const relativePath = paths.root.relativeFilePath;
-      const fileContent = await readFileContent(
-        join(baseDir, paths.root.relativeDirPath, relativePath),
-      );
-
-      return new CodexcliRule({
-        baseDir,
-        relativeDirPath: paths.root.relativeDirPath,
-        relativeFilePath: paths.root.relativeFilePath,
-        fileContent,
-        validate,
-        root: true,
-      });
-    }
-
-    if (!paths.nonRoot) {
-      throw new Error(`nonRoot path is not set for ${relativeFilePath}`);
-    }
-
-    const relativePath = join(paths.nonRoot.relativeDirPath, relativeFilePath);
-    const fileContent = await readFileContent(join(baseDir, relativePath));
     return new CodexcliRule({
-      baseDir,
-      relativeDirPath: paths.nonRoot.relativeDirPath,
-      relativeFilePath: relativeFilePath,
+      outputRoot,
+      relativeDirPath: root.relativeDirPath,
+      relativeFilePath: root.relativeFilePath,
       fileContent,
       validate,
-      root: false,
+      root: true,
     });
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
     global = false,
   }: ToolRuleFromRulesyncRuleParams): CodexcliRule {
     const paths = this.getSettablePaths({ global });
     const rulesyncFrontmatter = rulesyncRule.getFrontmatter();
-    const root = rulesyncFrontmatter.root ?? false;
+    const isRoot = rulesyncFrontmatter.root ?? false;
 
-    if (!root && rulesyncFrontmatter.reference && "reference" in paths && paths.reference) {
+    // 参照専用ルールは AGENTS.md への集約ではなく .codex/references/ へ個別出力する
+    if (!isRoot && rulesyncFrontmatter.reference && paths.reference) {
       return new CodexcliRule({
-        baseDir,
+        outputRoot,
         relativeDirPath: paths.reference.relativeDirPath,
         relativeFilePath: rulesyncRule.getRelativeFilePath(),
         fileContent: rulesyncRule.getBody(),
@@ -127,15 +119,14 @@ export class CodexcliRule extends ToolRule {
       });
     }
 
-    return new CodexcliRule(
-      this.buildToolRuleParamsAgentsmd({
-        baseDir,
-        rulesyncRule,
-        validate,
-        rootPath: paths.root,
-        nonRootPath: paths.nonRoot,
-      }),
-    );
+    return new CodexcliRule({
+      outputRoot,
+      relativeDirPath: paths.root.relativeDirPath,
+      relativeFilePath: paths.root.relativeFilePath,
+      fileContent: rulesyncRule.getBody(),
+      validate,
+      root: isRoot,
+    });
   }
 
   toRulesyncRule(): RulesyncRule {
@@ -143,23 +134,20 @@ export class CodexcliRule extends ToolRule {
   }
 
   validate(): ValidationResult {
-    // OpenAI Codex CLI rules are always valid since they don't have complex frontmatter
-    // The body content can be empty (though not recommended in practice)
-    // This follows the same pattern as other rule validation methods
     return { success: true, error: null };
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
-    global = false,
   }: ToolRuleForDeletionParams): CodexcliRule {
-    const paths = this.getSettablePaths({ global });
-    const isRoot = relativeFilePath === paths.root.relativeFilePath;
+    const isRoot =
+      relativeFilePath === CODEXCLI_RULE_FILE_NAME &&
+      (relativeDirPath === "." || relativeDirPath === CODEXCLI_DIR);
 
     return new CodexcliRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

@@ -29,32 +29,32 @@ describe("QwencodeIgnore", () => {
     it("should create instance with default parameters", () => {
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "*.log\nnode_modules/",
       });
 
       expect(qwencodeIgnore).toBeInstanceOf(QwencodeIgnore);
       expect(qwencodeIgnore.getRelativeDirPath()).toBe(".");
-      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".geminiignore");
+      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".qwenignore");
       expect(qwencodeIgnore.getFileContent()).toBe("*.log\nnode_modules/");
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: "subdir",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "*.tmp",
       });
 
-      expect(qwencodeIgnore.getFilePath()).toBe("/custom/path/subdir/.geminiignore");
+      expect(qwencodeIgnore.getFilePath()).toBe("/custom/path/subdir/.qwenignore");
     });
 
     it("should validate content by default", () => {
       expect(() => {
         const _instance = new QwencodeIgnore({
           relativeDirPath: ".",
-          relativeFilePath: ".geminiignore",
+          relativeFilePath: ".qwenignore",
           fileContent: "", // empty content should be valid
         });
       }).not.toThrow();
@@ -64,7 +64,7 @@ describe("QwencodeIgnore", () => {
       expect(() => {
         const _instance = new QwencodeIgnore({
           relativeDirPath: ".",
-          relativeFilePath: ".geminiignore",
+          relativeFilePath: ".qwenignore",
           fileContent: "any content",
           validate: false,
         });
@@ -76,9 +76,9 @@ describe("QwencodeIgnore", () => {
     it("should convert to RulesyncIgnore with same content", () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -92,9 +92,9 @@ describe("QwencodeIgnore", () => {
 
     it("should handle empty content", () => {
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "",
       });
 
@@ -106,9 +106,9 @@ describe("QwencodeIgnore", () => {
     it("should preserve patterns and formatting", () => {
       const fileContent = "# Generated files\n*.log\n*.tmp\n\n# Dependencies\nnode_modules/\n.env*";
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -119,7 +119,7 @@ describe("QwencodeIgnore", () => {
   });
 
   describe("fromRulesyncIgnore", () => {
-    it("should create QwencodeIgnore from RulesyncIgnore with default baseDir", () => {
+    it("should create QwencodeIgnore from RulesyncIgnore with default outputRoot", () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const rulesyncIgnore = new RulesyncIgnore({
         relativeDirPath: ".rulesync",
@@ -132,13 +132,13 @@ describe("QwencodeIgnore", () => {
       });
 
       expect(qwencodeIgnore).toBeInstanceOf(QwencodeIgnore);
-      expect(qwencodeIgnore.getBaseDir()).toBe(testDir);
+      expect(qwencodeIgnore.getOutputRoot()).toBe(testDir);
       expect(qwencodeIgnore.getRelativeDirPath()).toBe(".");
-      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".geminiignore");
+      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".qwenignore");
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should create QwencodeIgnore from RulesyncIgnore with custom baseDir", () => {
+    it("should create QwencodeIgnore from RulesyncIgnore with custom outputRoot", () => {
       const fileContent = "*.tmp\nbuild/";
       const rulesyncIgnore = new RulesyncIgnore({
         relativeDirPath: ".rulesync",
@@ -147,12 +147,12 @@ describe("QwencodeIgnore", () => {
       });
 
       const qwencodeIgnore = QwencodeIgnore.fromRulesyncIgnore({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         rulesyncIgnore,
       });
 
-      expect(qwencodeIgnore.getBaseDir()).toBe("/custom/base");
-      expect(qwencodeIgnore.getFilePath()).toBe("/custom/base/.geminiignore");
+      expect(qwencodeIgnore.getOutputRoot()).toBe("/custom/base");
+      expect(qwencodeIgnore.getFilePath()).toBe("/custom/base/.qwenignore");
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
@@ -187,59 +187,59 @@ describe("QwencodeIgnore", () => {
   });
 
   describe("fromFile", () => {
-    it("should read .geminiignore file from baseDir with default baseDir", async () => {
+    it("should read .qwenignore file from outputRoot with default outputRoot", async () => {
       const fileContent = "*.log\nnode_modules/\n.env";
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(qwencodeIgnore).toBeInstanceOf(QwencodeIgnore);
-      expect(qwencodeIgnore.getBaseDir()).toBe(testDir);
+      expect(qwencodeIgnore.getOutputRoot()).toBe(testDir);
       expect(qwencodeIgnore.getRelativeDirPath()).toBe(".");
-      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".geminiignore");
+      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".qwenignore");
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should read .geminiignore file with validation enabled by default", async () => {
+    it("should read .qwenignore file with validation enabled by default", async () => {
       const fileContent = "*.log\nnode_modules/";
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should read .geminiignore file with validation disabled", async () => {
+    it("should read .qwenignore file with validation disabled", async () => {
       const fileContent = "*.log\nnode_modules/";
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
 
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should handle empty .geminiignore file", async () => {
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, "");
+    it("should handle empty .qwenignore file", async () => {
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, "");
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(qwencodeIgnore.getFileContent()).toBe("");
     });
 
-    it("should handle .geminiignore file with complex patterns", async () => {
+    it("should handle .qwenignore file with complex patterns", async () => {
       const fileContent = `# Build outputs
 build/
 dist/
@@ -270,43 +270,43 @@ logs/
 .DS_Store
 Thumbs.db`;
 
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should default baseDir to process.cwd() when not provided", async () => {
+    it("should default outputRoot to process.cwd() when not provided", async () => {
       // process.cwd() is already mocked to return testDir in beforeEach
       const fileContent = "*.log\nnode_modules/";
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({});
 
-      expect(qwencodeIgnore.getBaseDir()).toBe(testDir);
+      expect(qwencodeIgnore.getOutputRoot()).toBe(testDir);
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should throw error when .geminiignore file does not exist", async () => {
+    it("should throw error when .qwenignore file does not exist", async () => {
       await expect(
         QwencodeIgnore.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });
 
     it("should handle file with Windows line endings", async () => {
       const fileContent = "*.log\r\nnode_modules/\r\n.env";
-      const geminiignorePath = join(testDir, ".geminiignore");
-      await writeFileContent(geminiignorePath, fileContent);
+      const qwenignorePath = join(testDir, ".qwenignore");
+      await writeFileContent(qwenignorePath, fileContent);
 
       const qwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(qwencodeIgnore.getFileContent()).toBe(fileContent);
@@ -318,7 +318,7 @@ Thumbs.db`;
       const fileContent = "*.log\nnode_modules/\n.env";
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -331,7 +331,7 @@ Thumbs.db`;
     it("should inherit validation method", () => {
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "*.log\nnode_modules/",
       });
 
@@ -343,16 +343,16 @@ Thumbs.db`;
 
     it("should inherit file path methods from ToolFile", () => {
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: "subdir",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "*.log",
       });
 
-      expect(qwencodeIgnore.getBaseDir()).toBe("/test/base");
+      expect(qwencodeIgnore.getOutputRoot()).toBe("/test/base");
       expect(qwencodeIgnore.getRelativeDirPath()).toBe("subdir");
-      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".geminiignore");
-      expect(qwencodeIgnore.getFilePath()).toBe("/test/base/subdir/.geminiignore");
+      expect(qwencodeIgnore.getRelativeFilePath()).toBe(".qwenignore");
+      expect(qwencodeIgnore.getFilePath()).toBe("/test/base/subdir/.qwenignore");
       expect(qwencodeIgnore.getFileContent()).toBe("*.log");
     });
   });
@@ -369,22 +369,22 @@ dist/
 
       // QwencodeIgnore -> RulesyncIgnore -> QwencodeIgnore
       const originalQwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: originalContent,
       });
 
       const rulesyncIgnore = originalQwencodeIgnore.toRulesyncIgnore();
       const roundTripQwencodeIgnore = QwencodeIgnore.fromRulesyncIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncIgnore,
       });
 
       expect(roundTripQwencodeIgnore.getFileContent()).toBe(originalContent);
-      expect(roundTripQwencodeIgnore.getBaseDir()).toBe(testDir);
+      expect(roundTripQwencodeIgnore.getOutputRoot()).toBe(testDir);
       expect(roundTripQwencodeIgnore.getRelativeDirPath()).toBe(".");
-      expect(roundTripQwencodeIgnore.getRelativeFilePath()).toBe(".geminiignore");
+      expect(roundTripQwencodeIgnore.getRelativeFilePath()).toBe(".qwenignore");
     });
 
     it("should maintain patterns in round-trip conversion", () => {
@@ -393,7 +393,7 @@ dist/
 
       const originalQwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: originalContent,
       });
 
@@ -410,7 +410,7 @@ dist/
     it("should handle file content with only whitespace", () => {
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: "   \n\t\n   ",
       });
 
@@ -423,7 +423,7 @@ dist/
       const fileContent = "*.log\r\nnode_modules/\n.env\r\nbuild/";
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -434,7 +434,7 @@ dist/
       const longPattern = "a".repeat(1000);
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: longPattern,
       });
 
@@ -446,7 +446,7 @@ dist/
       const unicodeContent = "*.log\n節点模块/\n環境.env\n🏗️build/";
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent: unicodeContent,
       });
 
@@ -459,9 +459,9 @@ dist/
     it("should write and read file correctly", async () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -470,7 +470,7 @@ dist/
 
       // Read file back
       const readQwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(readQwencodeIgnore.getFileContent()).toBe(fileContent);
@@ -483,9 +483,9 @@ dist/
 
       const fileContent = "*.log\nbuild/";
       const qwencodeIgnore = new QwencodeIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "project/config",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -493,7 +493,7 @@ dist/
       await writeFileContent(qwencodeIgnore.getFilePath(), qwencodeIgnore.getFileContent());
 
       const readQwencodeIgnore = await QwencodeIgnore.fromFile({
-        baseDir: join(testDir, "project/config"),
+        outputRoot: join(testDir, "project/config"),
       });
 
       expect(readQwencodeIgnore.getFileContent()).toBe(fileContent);
@@ -512,7 +512,7 @@ node_modules/
 
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -525,7 +525,7 @@ node_modules/
 
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 
@@ -538,7 +538,7 @@ node_modules/
 
       const qwencodeIgnore = new QwencodeIgnore({
         relativeDirPath: ".",
-        relativeFilePath: ".geminiignore",
+        relativeFilePath: ".qwenignore",
         fileContent,
       });
 

@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { COPILOT_HOOKS_DIR_PATH, COPILOT_HOOKS_FILE_NAME } from "../../constants/copilot-paths.js";
 import type { AiFileParams } from "../../types/ai-file.js";
 import type { ValidationResult } from "../../types/ai-file.js";
 import type { HooksConfig } from "../../types/hooks.js";
@@ -13,7 +14,7 @@ import {
 } from "../../types/hooks.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContentOrNull } from "../../utils/file.js";
-import { logger } from "../../utils/logger.js";
+import type { Logger } from "../../utils/logger.js";
 import type { RulesyncHooks } from "./rulesync-hooks.js";
 import {
   ToolHooks,
@@ -101,14 +102,14 @@ function canonicalToCopilotHooks(config: HooksConfig): Record<string, CopilotHoo
  * - If both are present, use `powershell` on Windows, `bash` otherwise,
  *   and log a warning that the other value was ignored.
  */
-function resolveImportCommand(entry: CopilotHookEntry): string | undefined {
+function resolveImportCommand(entry: CopilotHookEntry, logger?: Logger): string | undefined {
   const hasBash = typeof entry.bash === "string";
   const hasPowershell = typeof entry.powershell === "string";
   if (hasBash && hasPowershell) {
     const isWindows = process.platform === "win32";
     const chosen = isWindows ? "powershell" : "bash";
     const ignored = isWindows ? "bash" : "powershell";
-    logger.warn(
+    logger?.warn(
       `Copilot hook has both bash and powershell commands; using ${chosen} and ignoring ${ignored} on this platform.`,
     );
     return isWindows ? entry.powershell : entry.bash;
@@ -124,7 +125,7 @@ function resolveImportCommand(entry: CopilotHookEntry): string | undefined {
  * Extract hooks from Copilot hooks JSON into canonical format.
  * Copilot format: { version: 1, hooks: { eventName: [...hookEntries] } }
  */
-function copilotHooksToCanonical(copilotHooks: unknown): HooksConfig["hooks"] {
+function copilotHooksToCanonical(copilotHooks: unknown, logger?: Logger): HooksConfig["hooks"] {
   if (copilotHooks === null || copilotHooks === undefined || typeof copilotHooks !== "object") {
     return {};
   }
@@ -138,7 +139,7 @@ function copilotHooksToCanonical(copilotHooks: unknown): HooksConfig["hooks"] {
       const parseResult = CopilotHookEntrySchema.safeParse(rawEntry);
       if (!parseResult.success) continue;
       const entry = parseResult.data;
-      const command = resolveImportCommand(entry);
+      const command = resolveImportCommand(entry, logger);
       const timeout = entry.timeoutSec;
 
       defs.push({
@@ -164,21 +165,21 @@ export class CopilotHooks extends ToolHooks {
 
   static getSettablePaths(_options: { global?: boolean } = {}): ToolHooksSettablePaths {
     return {
-      relativeDirPath: join(".github", "hooks"),
-      relativeFilePath: "copilot-hooks.json",
+      relativeDirPath: COPILOT_HOOKS_DIR_PATH,
+      relativeFilePath: COPILOT_HOOKS_FILE_NAME,
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
     global = false,
   }: ToolHooksFromFileParams): Promise<CopilotHooks> {
     const paths = CopilotHooks.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, paths.relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
     const fileContent = (await readFileContentOrNull(filePath)) ?? '{"hooks":{}}';
     return new CopilotHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -187,7 +188,7 @@ export class CopilotHooks extends ToolHooks {
   }
 
   static async fromRulesyncHooks({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncHooks,
     validate = true,
   }: ToolHooksFromRulesyncHooksParams & {
@@ -198,7 +199,7 @@ export class CopilotHooks extends ToolHooks {
     const copilotHooks = canonicalToCopilotHooks(config);
     const fileContent = JSON.stringify({ version: 1, hooks: copilotHooks }, null, 2);
     return new CopilotHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -206,7 +207,7 @@ export class CopilotHooks extends ToolHooks {
     });
   }
 
-  toRulesyncHooks(): RulesyncHooks {
+  toRulesyncHooks(options?: { logger?: Logger }): RulesyncHooks {
     let parsed: { version?: number; hooks?: unknown };
     try {
       parsed = JSON.parse(this.getFileContent());
@@ -218,7 +219,7 @@ export class CopilotHooks extends ToolHooks {
         },
       );
     }
-    const hooks = copilotHooksToCanonical(parsed.hooks);
+    const hooks = copilotHooksToCanonical(parsed.hooks, options?.logger);
     return this.toRulesyncHooksDefault({
       fileContent: JSON.stringify({ version: 1, hooks }, null, 2),
     });
@@ -229,12 +230,12 @@ export class CopilotHooks extends ToolHooks {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolHooksForDeletionParams): CopilotHooks {
     return new CopilotHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: JSON.stringify({ hooks: {} }, null, 2),

@@ -3,14 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigResolver } from "../../config/config-resolver.js";
 import type { SourceEntry } from "../../config/config.js";
 import { Config } from "../../config/config.js";
+import { installApm } from "../../lib/apm/apm-install.js";
+import { apmManifestExists } from "../../lib/apm/apm-manifest.js";
+import { installGh } from "../../lib/gh/gh-install.js";
 import { resolveAndFetchSources } from "../../lib/sources.js";
-import { logger } from "../../utils/logger.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { installCommand } from "./install.js";
 
 // Mock dependencies
 vi.mock("../../config/config-resolver.js");
 vi.mock("../../lib/sources.js");
-vi.mock("../../utils/logger.js");
+vi.mock("../../lib/apm/apm-install.js");
+vi.mock("../../lib/apm/apm-manifest.js");
+vi.mock("../../lib/gh/gh-install.js");
 
 function createMockConfig(sources: SourceEntry[]): Config {
   return {
@@ -19,20 +24,18 @@ function createMockConfig(sources: SourceEntry[]): Config {
 }
 
 describe("installCommand", () => {
+  let mockLogger: ReturnType<typeof createMockLogger>;
+
   beforeEach(() => {
-    vi.mocked(logger.configure).mockImplementation(() => {});
-    vi.mocked(logger.info).mockImplementation(() => {});
-    vi.mocked(logger.success).mockImplementation(() => {});
-    vi.mocked(logger.warn).mockImplementation(() => {});
-    vi.mocked(logger.error).mockImplementation(() => {});
-    vi.mocked(logger.debug).mockImplementation(() => {});
+    mockLogger = createMockLogger();
+    vi.mocked(apmManifestExists).mockResolvedValue(false);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  describe("successful install", () => {
+  describe("rulesync mode (default)", () => {
     it("should install skills and log success", async () => {
       const sources: SourceEntry[] = [{ source: "owner/repo" }];
       vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig(sources));
@@ -41,18 +44,20 @@ describe("installCommand", () => {
         sourcesProcessed: 1,
       });
 
-      await installCommand({});
+      await installCommand(mockLogger, {});
 
-      expect(resolveAndFetchSources).toHaveBeenCalledWith({
-        sources,
-        baseDir: process.cwd(),
-        options: {
-          updateSources: undefined,
-          frozen: undefined,
-          token: undefined,
-        },
-      });
-      expect(logger.success).toHaveBeenCalledWith("Installed 3 skill(s) from 1 source(s).");
+      expect(resolveAndFetchSources).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sources,
+          projectRoot: process.cwd(),
+          options: {
+            updateSources: undefined,
+            frozen: undefined,
+            token: undefined,
+          },
+        }),
+      );
+      expect(mockLogger.success).toHaveBeenCalledWith("Installed 3 skill(s) from 1 source(s).");
     });
 
     it("should report all up to date when no skills fetched", async () => {
@@ -63,24 +68,47 @@ describe("installCommand", () => {
         sourcesProcessed: 1,
       });
 
-      await installCommand({});
+      await installCommand(mockLogger, {});
 
-      expect(logger.success).toHaveBeenCalledWith("All skills up to date (1 source(s) checked).");
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "All skills up to date (1 source(s) checked).",
+      );
     });
 
     it("should warn and return early when no sources defined", async () => {
       vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig([]));
 
-      await installCommand({});
+      await installCommand(mockLogger, {});
 
-      expect(logger.warn).toHaveBeenCalledWith(
+      expect(mockLogger.warn).toHaveBeenCalledWith(
         "No sources defined in configuration. Nothing to install.",
       );
       expect(resolveAndFetchSources).not.toHaveBeenCalled();
     });
+
+    it("should warn and suggest --mode apm when apm.yml is present but no sources", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(true);
+      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig([]));
+
+      await installCommand(mockLogger, {});
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("apm.yml is present"));
+      expect(resolveAndFetchSources).not.toHaveBeenCalled();
+    });
+
+    it("should error when both apm.yml and sources are defined", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(true);
+      vi.mocked(ConfigResolver.resolve).mockResolvedValue(
+        createMockConfig([{ source: "owner/repo" }]),
+      );
+
+      await expect(installCommand(mockLogger, {})).rejects.toThrow(
+        /Both apm.yml and rulesync.jsonc/,
+      );
+    });
   });
 
-  describe("option forwarding", () => {
+  describe("option forwarding (rulesync mode)", () => {
     it("should pass --update option", async () => {
       const sources: SourceEntry[] = [{ source: "owner/repo" }];
       vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig(sources));
@@ -89,7 +117,7 @@ describe("installCommand", () => {
         sourcesProcessed: 1,
       });
 
-      await installCommand({ update: true });
+      await installCommand(mockLogger, { update: true });
 
       expect(resolveAndFetchSources).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -106,7 +134,7 @@ describe("installCommand", () => {
         sourcesProcessed: 1,
       });
 
-      await installCommand({ frozen: true });
+      await installCommand(mockLogger, { frozen: true });
 
       expect(resolveAndFetchSources).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -123,12 +151,119 @@ describe("installCommand", () => {
         sourcesProcessed: 1,
       });
 
-      await installCommand({ token: "my-token" });
+      await installCommand(mockLogger, { token: "my-token" });
 
       expect(resolveAndFetchSources).toHaveBeenCalledWith(
         expect.objectContaining({
           options: expect.objectContaining({ token: "my-token" }),
         }),
+      );
+    });
+  });
+
+  describe("apm mode", () => {
+    it("errors when apm.yml is missing", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(false);
+
+      await expect(installCommand(mockLogger, { mode: "apm" })).rejects.toThrow(
+        /requires an apm.yml/,
+      );
+    });
+
+    it("routes to installApm and reports success when files are deployed", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(true);
+      vi.mocked(installApm).mockResolvedValue({
+        dependenciesProcessed: 2,
+        deployedFileCount: 5,
+        failedDependencyCount: 0,
+      });
+
+      await installCommand(mockLogger, { mode: "apm", update: true, token: "tok" });
+
+      expect(installApm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectRoot: process.cwd(),
+          options: expect.objectContaining({ update: true, token: "tok" }),
+        }),
+      );
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "Installed 5 file(s) from 2 apm dependency(ies).",
+      );
+    });
+
+    it("reports up-to-date when no files are deployed", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(true);
+      vi.mocked(installApm).mockResolvedValue({
+        dependenciesProcessed: 2,
+        deployedFileCount: 0,
+        failedDependencyCount: 0,
+      });
+
+      await installCommand(mockLogger, { mode: "apm" });
+
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "All apm dependencies up to date (2 checked).",
+      );
+    });
+
+    it("throws when installApm reports failed dependencies", async () => {
+      vi.mocked(apmManifestExists).mockResolvedValue(true);
+      vi.mocked(installApm).mockResolvedValue({
+        dependenciesProcessed: 2,
+        deployedFileCount: 1,
+        failedDependencyCount: 1,
+      });
+
+      await expect(installCommand(mockLogger, { mode: "apm" })).rejects.toThrow(
+        /Failed to install 1 of 2 apm dependency/,
+      );
+    });
+  });
+
+  describe("gh mode", () => {
+    it("invokes installGh with sources from rulesync.jsonc and reports success", async () => {
+      const sources: SourceEntry[] = [{ source: "owner/repo", agent: "claude-code" }];
+      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig(sources));
+      vi.mocked(installGh).mockResolvedValue({
+        sourcesProcessed: 1,
+        installedSkillCount: 2,
+        failedSourceCount: 0,
+      });
+
+      await installCommand(mockLogger, { mode: "gh" });
+
+      expect(installGh).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sources,
+          projectRoot: process.cwd(),
+          options: { update: undefined, frozen: undefined, token: undefined },
+        }),
+      );
+      expect(mockLogger.success).toHaveBeenCalledWith("Installed 2 skill(s) from 1 gh source(s).");
+    });
+
+    it("warns when no sources are defined", async () => {
+      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig([]));
+
+      await installCommand(mockLogger, { mode: "gh" });
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "No sources defined in configuration. Nothing to install.",
+      );
+      expect(installGh).not.toHaveBeenCalled();
+    });
+
+    it("throws when installGh reports failed sources", async () => {
+      const sources: SourceEntry[] = [{ source: "owner/repo" }];
+      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig(sources));
+      vi.mocked(installGh).mockResolvedValue({
+        sourcesProcessed: 1,
+        installedSkillCount: 0,
+        failedSourceCount: 1,
+      });
+
+      await expect(installCommand(mockLogger, { mode: "gh" })).rejects.toThrow(
+        /Failed to install 1 of 1 gh source/,
       );
     });
   });
@@ -141,7 +276,7 @@ describe("installCommand", () => {
         new Error("Frozen install failed: lockfile is missing entries"),
       );
 
-      await expect(installCommand({ frozen: true })).rejects.toThrow(
+      await expect(installCommand(mockLogger, { frozen: true })).rejects.toThrow(
         "Frozen install failed: lockfile is missing entries",
       );
     });
@@ -151,31 +286,7 @@ describe("installCommand", () => {
       vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig(sources));
       vi.mocked(resolveAndFetchSources).mockRejectedValue(new Error("Network error"));
 
-      await expect(installCommand({})).rejects.toThrow("Network error");
-    });
-  });
-
-  describe("logger configuration", () => {
-    it("should configure logger with verbose mode", async () => {
-      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig([]));
-
-      await installCommand({ verbose: true });
-
-      expect(logger.configure).toHaveBeenCalledWith({
-        verbose: true,
-        silent: false,
-      });
-    });
-
-    it("should configure logger with silent mode", async () => {
-      vi.mocked(ConfigResolver.resolve).mockResolvedValue(createMockConfig([]));
-
-      await installCommand({ silent: true });
-
-      expect(logger.configure).toHaveBeenCalledWith({
-        verbose: false,
-        silent: true,
-      });
+      await expect(installCommand(mockLogger, {})).rejects.toThrow("Network error");
     });
   });
 });

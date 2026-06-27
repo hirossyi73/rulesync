@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { CLAUDECODE_COMMANDS_DIR_PATH } from "../../constants/claudecode-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContent } from "../../utils/file.js";
@@ -19,6 +20,9 @@ import {
 export const ClaudecodeCommandFrontmatterSchema = z.looseObject({
   description: z.optional(z.string()),
   "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+  // Removes the listed tools from the model while the command is active.
+  // Accepts the space/comma-separated string form or a YAML list, mirroring `allowed-tools`.
+  "disallowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
   "argument-hint": z.optional(z.string()),
   model: z.optional(z.string()),
   "disable-model-invocation": z.optional(z.boolean()),
@@ -57,7 +61,7 @@ export class ClaudecodeCommand extends ToolCommand {
 
   static getSettablePaths(_options: { global?: boolean } = {}): ToolCommandSettablePaths {
     return {
-      relativeDirPath: join(".claude", "commands"),
+      relativeDirPath: CLAUDECODE_COMMANDS_DIR_PATH,
     };
   }
 
@@ -83,7 +87,7 @@ export class ClaudecodeCommand extends ToolCommand {
     const fileContent = stringifyFrontmatter(this.body, rulesyncFrontmatter);
 
     return new RulesyncCommand({
-      baseDir: ".", // RulesyncCommand baseDir is always the project root directory
+      outputRoot: ".", // RulesyncCommand outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -94,7 +98,7 @@ export class ClaudecodeCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
     global = false,
@@ -115,7 +119,7 @@ export class ClaudecodeCommand extends ToolCommand {
     const paths = this.getSettablePaths({ global });
 
     return new ClaudecodeCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: claudecodeFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
@@ -151,13 +155,13 @@ export class ClaudecodeCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolCommandFromFileParams): Promise<ClaudecodeCommand> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     // Read file content
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
@@ -169,7 +173,7 @@ export class ClaudecodeCommand extends ToolCommand {
     }
 
     return new ClaudecodeCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -179,12 +183,12 @@ export class ClaudecodeCommand extends ToolCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): ClaudecodeCommand {
     return new ClaudecodeCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { description: "" },

@@ -16,7 +16,9 @@ import {
   removeFile,
   writeFileContent,
 } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
+import { ConsoleLogger } from "../utils/logger.js";
+
+const logger = new ConsoleLogger({ verbose: false, silent: true });
 
 const maxSubagentSizeBytes = 1024 * 1024; // 1MB
 const maxSubagentsCount = 1000;
@@ -150,7 +152,7 @@ async function putSubagent({
 
     // Create a new RulesyncSubagent instance
     const subagent = new RulesyncSubagent({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
       relativeFilePath: filename,
       frontmatter,
@@ -210,7 +212,7 @@ async function deleteSubagent({ relativePathFromCwd }: { relativePathFromCwd: st
 /**
  * Schema for subagent-related tool parameters
  */
-export const subagentToolSchemas = {
+const subagentToolSchemas = {
   listSubagents: z.object({}),
   getSubagent: z.object({
     relativePathFromCwd: z.string(),

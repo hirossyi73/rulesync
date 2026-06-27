@@ -19,10 +19,18 @@ import { parseFrontmatter, stringifyFrontmatter } from "../../utils/frontmatter.
 export const RulesyncCommandFrontmatterSchema = z.looseObject({
   targets: z._default(RulesyncTargetsSchema, ["*"]),
   description: z.optional(z.string()),
+  takt: z.optional(
+    z.looseObject({
+      name: z.optional(z.string()),
+      // Facet inheritance: emit a leading `{extends:<parent>}` directive (Takt 0.39.0+).
+      // Commands map to the `instructions` facet, which supports inheritance.
+      extends: z.optional(z.string()),
+    }),
+  ),
 });
 
 // Input type allows targets to be omitted (will use default value)
-export type RulesyncCommandFrontmatterInput = z.input<typeof RulesyncCommandFrontmatterSchema> &
+type RulesyncCommandFrontmatterInput = z.input<typeof RulesyncCommandFrontmatterSchema> &
   Partial<Record<ToolTarget, Record<string, unknown>>>;
 // Output type has targets always present after parsing
 export type RulesyncCommandFrontmatter = z.infer<typeof RulesyncCommandFrontmatterSchema> &
@@ -46,7 +54,7 @@ export class RulesyncCommand extends RulesyncFile {
     const parseResult = RulesyncCommandFrontmatterSchema.safeParse(frontmatter);
     if (!parseResult.success && rest.validate) {
       throw new Error(
-        `Invalid frontmatter in ${join(rest.baseDir ?? process.cwd(), rest.relativeDirPath, rest.relativeFilePath)}: ${formatError(parseResult.error)}`,
+        `Invalid frontmatter in ${join(rest.outputRoot ?? process.cwd(), rest.relativeDirPath, rest.relativeFilePath)}: ${formatError(parseResult.error)}`,
       );
     }
     // Apply defaults manually when validation is disabled but parsing failed
@@ -80,7 +88,7 @@ export class RulesyncCommand extends RulesyncFile {
 
   withRelativeFilePath(newRelativeFilePath: string): RulesyncCommand {
     return new RulesyncCommand({
-      baseDir: this.getBaseDir(),
+      outputRoot: this.getOutputRoot(),
       relativeDirPath: this.getRelativeDirPath(),
       relativeFilePath: newRelativeFilePath,
       frontmatter: this.getFrontmatter(),
@@ -110,16 +118,23 @@ export class RulesyncCommand extends RulesyncFile {
   }
 
   static async fromFile({
+    outputRoot = process.cwd(),
     relativeFilePath,
   }: RulesyncFileFromFileParams): Promise<RulesyncCommand> {
     // Read file content
     const filePath = join(
-      process.cwd(),
+      outputRoot,
       RulesyncCommand.getSettablePaths().relativeDirPath,
       relativeFilePath,
     );
     const fileContent = await readFileContent(filePath);
-    const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
+    const { frontmatter, body: content, hasFrontmatter } = parseFrontmatter(fileContent, filePath);
+
+    if (!hasFrontmatter) {
+      throw new Error(
+        `Missing frontmatter in ${filePath}. Rulesync files must begin with a YAML frontmatter block delimited by '---'.`,
+      );
+    }
 
     // Validate frontmatter using CommandFrontmatterSchema
     const result = RulesyncCommandFrontmatterSchema.safeParse(frontmatter);
@@ -128,7 +143,7 @@ export class RulesyncCommand extends RulesyncFile {
     }
 
     return new RulesyncCommand({
-      baseDir: process.cwd(),
+      outputRoot,
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,

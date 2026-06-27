@@ -39,9 +39,9 @@ describe("KiloIgnore", () => {
       expect(kiloIgnore.getFileContent()).toBe("*.log\nnode_modules/");
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const kiloIgnore = new KiloIgnore({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: "subdir",
         relativeFilePath: ".kilocodeignore",
         fileContent: "*.tmp",
@@ -76,7 +76,7 @@ describe("KiloIgnore", () => {
     it("should convert to RulesyncIgnore with same content", () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const kiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".kilocodeignore",
         fileContent,
@@ -92,7 +92,7 @@ describe("KiloIgnore", () => {
 
     it("should handle empty content", () => {
       const kiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".kilocodeignore",
         fileContent: "",
@@ -106,7 +106,7 @@ describe("KiloIgnore", () => {
     it("should preserve patterns and formatting", () => {
       const fileContent = "# Generated files\n*.log\n*.tmp\n\n# Dependencies\nnode_modules/\n.env*";
       const kiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".kilocodeignore",
         fileContent,
@@ -119,7 +119,7 @@ describe("KiloIgnore", () => {
   });
 
   describe("fromRulesyncIgnore", () => {
-    it("should create KiloIgnore from RulesyncIgnore with default baseDir", () => {
+    it("should create KiloIgnore from RulesyncIgnore with default outputRoot", () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const rulesyncIgnore = new RulesyncIgnore({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
@@ -132,13 +132,13 @@ describe("KiloIgnore", () => {
       });
 
       expect(kiloIgnore).toBeInstanceOf(KiloIgnore);
-      expect(kiloIgnore.getBaseDir()).toBe(testDir);
+      expect(kiloIgnore.getOutputRoot()).toBe(testDir);
       expect(kiloIgnore.getRelativeDirPath()).toBe(".");
       expect(kiloIgnore.getRelativeFilePath()).toBe(".kilocodeignore");
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should create KiloIgnore from RulesyncIgnore with custom baseDir", () => {
+    it("should create KiloIgnore from RulesyncIgnore with custom outputRoot", () => {
       const fileContent = "*.tmp\nbuild/";
       const rulesyncIgnore = new RulesyncIgnore({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
@@ -147,11 +147,11 @@ describe("KiloIgnore", () => {
       });
 
       const kiloIgnore = KiloIgnore.fromRulesyncIgnore({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         rulesyncIgnore,
       });
 
-      expect(kiloIgnore.getBaseDir()).toBe("/custom/base");
+      expect(kiloIgnore.getOutputRoot()).toBe("/custom/base");
       expect(kiloIgnore.getFilePath()).toBe("/custom/base/.kilocodeignore");
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
     });
@@ -187,17 +187,17 @@ describe("KiloIgnore", () => {
   });
 
   describe("fromFile", () => {
-    it("should read .kilocodeignore file from baseDir with default baseDir", async () => {
+    it("should read .kilocodeignore file from outputRoot with default outputRoot", async () => {
       const fileContent = "*.log\nnode_modules/\n.env";
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(kiloIgnore).toBeInstanceOf(KiloIgnore);
-      expect(kiloIgnore.getBaseDir()).toBe(testDir);
+      expect(kiloIgnore.getOutputRoot()).toBe(testDir);
       expect(kiloIgnore.getRelativeDirPath()).toBe(".");
       expect(kiloIgnore.getRelativeFilePath()).toBe(".kilocodeignore");
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
@@ -205,11 +205,11 @@ describe("KiloIgnore", () => {
 
     it("should read .kilocodeignore file with validation enabled by default", async () => {
       const fileContent = "*.log\nnode_modules/";
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
@@ -217,11 +217,11 @@ describe("KiloIgnore", () => {
 
     it("should read .kilocodeignore file with validation disabled", async () => {
       const fileContent = "*.log\nnode_modules/";
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
 
@@ -229,11 +229,11 @@ describe("KiloIgnore", () => {
     });
 
     it("should handle empty .kilocodeignore file", async () => {
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, "");
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, "");
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(kiloIgnore.getFileContent()).toBe("");
@@ -270,43 +270,43 @@ logs/
 .DS_Store
 Thumbs.db`;
 
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
     });
 
-    it("should default baseDir to process.cwd() when not provided", async () => {
+    it("should default outputRoot to process.cwd() when not provided", async () => {
       // process.cwd() is already mocked to return testDir in beforeEach
       const fileContent = "*.log\nnode_modules/";
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({});
 
-      expect(kiloIgnore.getBaseDir()).toBe(testDir);
+      expect(kiloIgnore.getOutputRoot()).toBe(testDir);
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
     });
 
     it("should throw error when .kilocodeignore file does not exist", async () => {
       await expect(
         KiloIgnore.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });
 
     it("should handle file with Windows line endings", async () => {
       const fileContent = "*.log\r\nnode_modules/\r\n.env";
-      const kilocodeignorePath = join(testDir, ".kilocodeignore");
-      await writeFileContent(kilocodeignorePath, fileContent);
+      const kiloignorePath = join(testDir, ".kilocodeignore");
+      await writeFileContent(kiloignorePath, fileContent);
 
       const kiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(kiloIgnore.getFileContent()).toBe(fileContent);
@@ -343,13 +343,13 @@ Thumbs.db`;
 
     it("should inherit file path methods from ToolFile", () => {
       const kiloIgnore = new KiloIgnore({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: "subdir",
         relativeFilePath: ".kilocodeignore",
         fileContent: "*.log",
       });
 
-      expect(kiloIgnore.getBaseDir()).toBe("/test/base");
+      expect(kiloIgnore.getOutputRoot()).toBe("/test/base");
       expect(kiloIgnore.getRelativeDirPath()).toBe("subdir");
       expect(kiloIgnore.getRelativeFilePath()).toBe(".kilocodeignore");
       expect(kiloIgnore.getFilePath()).toBe("/test/base/subdir/.kilocodeignore");
@@ -369,7 +369,7 @@ dist/
 
       // KiloIgnore -> RulesyncIgnore -> KiloIgnore
       const originalKiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".kilocodeignore",
         fileContent: originalContent,
@@ -377,12 +377,12 @@ dist/
 
       const rulesyncIgnore = originalKiloIgnore.toRulesyncIgnore();
       const roundTripKiloIgnore = KiloIgnore.fromRulesyncIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncIgnore,
       });
 
       expect(roundTripKiloIgnore.getFileContent()).toBe(originalContent);
-      expect(roundTripKiloIgnore.getBaseDir()).toBe(testDir);
+      expect(roundTripKiloIgnore.getOutputRoot()).toBe(testDir);
       expect(roundTripKiloIgnore.getRelativeDirPath()).toBe(".");
       expect(roundTripKiloIgnore.getRelativeFilePath()).toBe(".kilocodeignore");
     });
@@ -464,7 +464,7 @@ dist/
     it("should write and read file correctly", async () => {
       const fileContent = "*.log\nnode_modules/\n.env";
       const kiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".kilocodeignore",
         fileContent,
@@ -475,7 +475,7 @@ dist/
 
       // Read file back
       const readKiloIgnore = await KiloIgnore.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(readKiloIgnore.getFileContent()).toBe(fileContent);
@@ -488,7 +488,7 @@ dist/
 
       const fileContent = "*.log\nbuild/";
       const kiloIgnore = new KiloIgnore({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "project/config",
         relativeFilePath: ".kilocodeignore",
         fileContent,
@@ -498,7 +498,7 @@ dist/
       await writeFileContent(kiloIgnore.getFilePath(), kiloIgnore.getFileContent());
 
       const readKiloIgnore = await KiloIgnore.fromFile({
-        baseDir: join(testDir, "project/config"),
+        outputRoot: join(testDir, "project/config"),
       });
 
       expect(readKiloIgnore.getFileContent()).toBe(fileContent);
@@ -565,7 +565,7 @@ temp*/
 
     it("should work in workspace root context", () => {
       const kiloIgnore = KiloIgnore.fromRulesyncIgnore({
-        baseDir: "/workspace/root",
+        outputRoot: "/workspace/root",
         rulesyncIgnore: new RulesyncIgnore({
           relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
           relativeFilePath: ".rulesignore",

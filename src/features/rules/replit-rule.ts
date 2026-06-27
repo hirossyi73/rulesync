@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { REPLIT_RULE_FILE_NAME } from "../../constants/replit-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncRule } from "./rulesync-rule.js";
@@ -36,13 +37,13 @@ export class ReplitRule extends ToolRule {
     return {
       root: {
         relativeDirPath: ".",
-        relativeFilePath: "replit.md",
+        relativeFilePath: REPLIT_RULE_FILE_NAME,
       },
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolRuleFromFileParams): Promise<ReplitRule> {
@@ -55,11 +56,11 @@ export class ReplitRule extends ToolRule {
 
     const relativePath = paths.root.relativeFilePath;
     const fileContent = await readFileContent(
-      join(baseDir, paths.root.relativeDirPath, relativePath),
+      join(outputRoot, paths.root.relativeDirPath, relativePath),
     );
 
     return new ReplitRule({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.root.relativeDirPath,
       relativeFilePath: paths.root.relativeFilePath,
       fileContent,
@@ -69,7 +70,7 @@ export class ReplitRule extends ToolRule {
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
   }: ToolRuleFromRulesyncRuleParams): ReplitRule {
@@ -83,7 +84,7 @@ export class ReplitRule extends ToolRule {
 
     return new ReplitRule(
       this.buildToolRuleParamsDefault({
-        baseDir,
+        outputRoot,
         rulesyncRule,
         validate,
         rootPath: paths.root,
@@ -102,7 +103,7 @@ export class ReplitRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolRuleForDeletionParams): ReplitRule {
@@ -110,7 +111,7 @@ export class ReplitRule extends ToolRule {
     const isRoot = relativeFilePath === paths.root.relativeFilePath;
 
     return new ReplitRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

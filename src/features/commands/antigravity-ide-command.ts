@@ -1,0 +1,35 @@
+import {
+  ANTIGRAVITY_IDE_COMMANDS_DIR_PATH,
+  ANTIGRAVITY_IDE_GLOBAL_WORKFLOWS_DIR_PATH,
+} from "../../constants/antigravity-ide-paths.js";
+import { ToolTarget } from "../../types/tool-targets.js";
+import { AntigravitySharedCommand } from "./antigravity-shared-command.js";
+import { RulesyncCommand } from "./rulesync-command.js";
+
+/**
+ * Command (workflow) generator for the Google Antigravity IDE (Antigravity 2.0).
+ *
+ * Generates workflow files in `.agents/workflows/` (project scope) and
+ * `~/.gemini/antigravity/global_workflows/` (global scope). All body and
+ * frontmatter handling is shared with {@link AntigravitySharedCommand}.
+ */
+export class AntigravityIdeCommand extends AntigravitySharedCommand {
+  protected static override getProjectRelativeDirPath(): string {
+    return ANTIGRAVITY_IDE_COMMANDS_DIR_PATH;
+  }
+
+  protected static override getGlobalRelativeDirPath(): string {
+    return ANTIGRAVITY_IDE_GLOBAL_WORKFLOWS_DIR_PATH;
+  }
+
+  protected override getToolTargetName(): ToolTarget {
+    return "antigravity-ide";
+  }
+
+  static override isTargetedByRulesyncCommand(rulesyncCommand: RulesyncCommand): boolean {
+    return this.isTargetedByRulesyncCommandDefault({
+      rulesyncCommand,
+      toolTarget: "antigravity-ide",
+    });
+  }
+}

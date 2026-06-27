@@ -6,13 +6,14 @@ import { checkRulesyncDirExists, generate, type GenerateResult } from "../lib/ge
 import { type RulesyncFeatures } from "../types/features.js";
 import { type RulesyncTargets } from "../types/tool-targets.js";
 import { formatError } from "../utils/error.js";
+import { ConsoleLogger } from "../utils/logger.js";
 import { calculateTotalCount } from "../utils/result.js";
 import { type McpResultCounts } from "./types.js";
 
 /**
  * Schema for generate options
  * Excluded parameters:
- * - baseDirs: Always use [process.cwd()] in MCP context
+ * - outputRoots: Always use [process.cwd()] in MCP context
  * - verbose: Meaningless in MCP (no console output)
  * - silent: Meaningless in MCP
  * - configPath: Always use default path from process.cwd()
@@ -31,6 +32,12 @@ export type GenerateOptions = z.infer<typeof generateOptionsSchema>;
 
 export type McpGenerateResult = {
   success: boolean;
+  /**
+   * Human-readable summary of the outcome. Clarifies that a `totalCount` of 0
+   * means "already up to date" (success with nothing to write) rather than a
+   * failure, since `generate` is idempotent and only writes changed files.
+   */
+  message?: string;
   result?: McpResultCounts;
   config?: {
     targets: string[];
@@ -51,7 +58,7 @@ export type McpGenerateResult = {
 export async function executeGenerate(options: GenerateOptions = {}): Promise<McpGenerateResult> {
   try {
     // Check if .rulesync directory exists
-    const exists = await checkRulesyncDirExists({ baseDir: process.cwd() });
+    const exists = await checkRulesyncDirExists({ inputRoot: process.cwd() });
     if (!exists) {
       return {
         success: false,
@@ -64,22 +71,21 @@ export async function executeGenerate(options: GenerateOptions = {}): Promise<Mc
     // ConfigResolver handles: CLI options > rulesync.local.jsonc > rulesync.jsonc > defaults
     // In MCP context, options act as CLI options (highest priority)
     const config = await ConfigResolver.resolve({
-      // eslint-disable-next-line no-type-assertion/no-type-assertion
       targets: options.targets as RulesyncTargets | undefined,
-      // eslint-disable-next-line no-type-assertion/no-type-assertion
       features: options.features as RulesyncFeatures | undefined,
       delete: options.delete,
       global: options.global,
       simulateCommands: options.simulateCommands,
       simulateSubagents: options.simulateSubagents,
       simulateSkills: options.simulateSkills,
-      // Always use default baseDirs (process.cwd()) and configPath
+      // Always use default outputRoots (process.cwd()) and configPath
       // verbose and silent are meaningless in MCP context
       verbose: false,
       silent: true,
     });
 
-    const generateResult = await generate({ config });
+    const logger = new ConsoleLogger({ verbose: false, silent: true });
+    const generateResult = await generate({ config, logger });
 
     return buildSuccessResponse({ generateResult, config });
   } catch (error) {
@@ -88,6 +94,30 @@ export async function executeGenerate(options: GenerateOptions = {}): Promise<Mc
       error: formatError(error),
     };
   }
+}
+
+/**
+ * Build a human-readable summary of a successful generation.
+ *
+ * `generate` is idempotent: `totalCount` reflects only files whose content
+ * actually changed on disk, so a count of 0 is a normal "nothing to update"
+ * outcome — not a failure. The message makes that explicit so MCP callers do
+ * not misread a zero count as a broken generate.
+ */
+function buildGenerateMessage(params: { totalCount: number; config: Config }): string {
+  const { totalCount, config } = params;
+  const targets = config.getTargets().join(", ");
+  const features = config.getFeatures().join(", ");
+
+  if (totalCount > 0) {
+    return `Generated ${totalCount} file(s) for targets [${targets}] and features [${features}].`;
+  }
+
+  return (
+    `No files needed updating for targets [${targets}] and features [${features}]. ` +
+    `'generate' only writes files whose content changed, so a totalCount of 0 means the ` +
+    `outputs are already up to date — this is a successful no-op, not a failure.`
+  );
 }
 
 function buildSuccessResponse(params: {
@@ -100,6 +130,7 @@ function buildSuccessResponse(params: {
 
   return {
     success: true,
+    message: buildGenerateMessage({ totalCount, config }),
     result: {
       rulesCount: generateResult.rulesCount,
       ignoreCount: generateResult.ignoreCount,
@@ -108,6 +139,7 @@ function buildSuccessResponse(params: {
       subagentsCount: generateResult.subagentsCount,
       skillsCount: generateResult.skillsCount,
       hooksCount: generateResult.hooksCount,
+      permissionsCount: generateResult.permissionsCount,
       totalCount,
     },
     config: {
@@ -122,7 +154,7 @@ function buildSuccessResponse(params: {
   };
 }
 
-export const generateToolSchemas = {
+const generateToolSchemas = {
   executeGenerate: generateOptionsSchema,
 };
 
@@ -130,7 +162,7 @@ export const generateTools = {
   executeGenerate: {
     name: "executeGenerate",
     description:
-      "Execute the rulesync generate command to create output files for AI tools. Uses rulesync.jsonc settings by default, but options can override them.",
+      "Execute the rulesync generate command to create output files for AI tools. Uses rulesync.jsonc settings by default, but options can override them. Idempotent: only files whose content changed are written, so a totalCount of 0 means the outputs are already up to date (a successful no-op), not a failure. See the 'message' field for a human-readable summary.",
     parameters: generateToolSchemas.executeGenerate,
     execute: async (options: GenerateOptions = {}): Promise<string> => {
       const result = await executeGenerate(options);

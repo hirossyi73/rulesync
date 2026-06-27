@@ -126,7 +126,7 @@ license: Apache-2.0
 Skill content goes here.`,
       );
 
-      const skill = await CopilotSkill.fromDir({ baseDir: testDir, dirName: "webapp-testing" });
+      const skill = await CopilotSkill.fromDir({ outputRoot: testDir, dirName: "webapp-testing" });
 
       expect(skill).toBeInstanceOf(CopilotSkill);
       expect(skill.getFrontmatter()).toEqual({
@@ -176,7 +176,7 @@ Skill content goes here.`,
 
     it("should convert from RulesyncSkill and preserve license", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "webapp-testing",
         frontmatter: {
@@ -197,12 +197,30 @@ Skill content goes here.`,
       });
       expect(copilotSkill.getBody()).toBe("Follow the testing plan");
     });
+
+    it("should round-trip the allowed-tools skill frontmatter", () => {
+      const skill = new CopilotSkill({
+        dirName: "shell-skill",
+        frontmatter: {
+          name: "shell-skill",
+          description: "Runs shell",
+          "allowed-tools": "shell",
+        },
+        body: "body",
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().copilot).toEqual({ "allowed-tools": "shell" });
+
+      const roundTripped = CopilotSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(roundTripped.getFrontmatter()["allowed-tools"]).toBe("shell");
+    });
   });
 
   describe("isTargetedByRulesyncSkill", () => {
     it("should return true when targets include '*'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "all-skill",
         frontmatter: { name: "all-skill", description: "All targets", targets: ["*"] },
@@ -214,7 +232,7 @@ Skill content goes here.`,
 
     it("should return true when targets include copilot", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "copilot-skill",
         frontmatter: { name: "copilot-skill", description: "Only copilot", targets: ["copilot"] },
@@ -226,7 +244,7 @@ Skill content goes here.`,
 
     it("should return false when copilot is not targeted", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "cursor-skill",
         frontmatter: { name: "cursor-skill", description: "Cursor only", targets: ["cursor"] },

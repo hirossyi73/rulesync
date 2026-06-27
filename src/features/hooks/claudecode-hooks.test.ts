@@ -3,10 +3,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
 import { ClaudecodeHooks } from "./claudecode-hooks.js";
 import { RulesyncHooks } from "./rulesync-hooks.js";
+
+const logger = createMockLogger();
 
 describe("ClaudecodeHooks", () => {
   let testDir: string;
@@ -19,6 +22,7 @@ describe("ClaudecodeHooks", () => {
 
   afterEach(async () => {
     await cleanup();
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 
@@ -48,7 +52,7 @@ describe("ClaudecodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -56,7 +60,7 @@ describe("ClaudecodeHooks", () => {
       });
 
       const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -66,6 +70,101 @@ describe("ClaudecodeHooks", () => {
       expect(parsed.hooks.SessionStart).toBeDefined();
       expect(parsed.hooks.Stop).toBeDefined();
       expect(parsed.hooks.afterFileEdit).toBeUndefined();
+    });
+
+    it("should support the current documented Claude Code hook events (#1628)", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          instructionsLoaded: [{ command: "a.sh" }],
+          userPromptExpansion: [{ command: "b.sh" }],
+          postToolUseFailure: [{ command: "c.sh" }],
+          postToolBatch: [{ command: "d.sh" }],
+          permissionDenied: [{ command: "e.sh" }],
+          subagentStart: [{ command: "f.sh" }],
+          taskCreated: [{ command: "g.sh" }],
+          taskCompleted: [{ command: "h.sh" }],
+          stopFailure: [{ command: "i.sh" }],
+          teammateIdle: [{ command: "j.sh" }],
+          configChange: [{ command: "k.sh" }],
+          cwdChanged: [{ command: "l.sh" }],
+          fileChanged: [{ command: "m.sh" }],
+          postCompact: [{ command: "n.sh" }],
+          elicitation: [{ command: "o.sh" }],
+          elicitationResult: [{ command: "p.sh" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const parsed = JSON.parse(claudecodeHooks.getFileContent());
+      // Each canonical event is emitted under its documented PascalCase name.
+      for (const eventName of [
+        "InstructionsLoaded",
+        "UserPromptExpansion",
+        "PostToolUseFailure",
+        "PostToolBatch",
+        "PermissionDenied",
+        "SubagentStart",
+        "TaskCreated",
+        "TaskCompleted",
+        "StopFailure",
+        "TeammateIdle",
+        "ConfigChange",
+        "CwdChanged",
+        "FileChanged",
+        "PostCompact",
+        "Elicitation",
+        "ElicitationResult",
+      ]) {
+        expect(parsed.hooks[eventName], `missing ${eventName}`).toBeDefined();
+      }
+    });
+
+    it("omits the matcher for no-matcher events but keeps it for matcher events (#1628)", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          // No-matcher event: matcher must be dropped.
+          taskCreated: [{ matcher: "Bash", command: "a.sh" }],
+          // Matcher-supporting event: matcher must be preserved.
+          postToolUseFailure: [{ matcher: "Bash", command: "b.sh" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const parsed = JSON.parse(claudecodeHooks.getFileContent());
+      expect(parsed.hooks.TaskCreated[0].matcher).toBeUndefined();
+      expect(parsed.hooks.PostToolUseFailure[0].matcher).toBe("Bash");
     });
 
     it("should only prefix dot-relative commands with $CLAUDE_PROJECT_DIR", async () => {
@@ -82,7 +181,7 @@ describe("ClaudecodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -90,7 +189,7 @@ describe("ClaudecodeHooks", () => {
       });
 
       const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -127,7 +226,7 @@ describe("ClaudecodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -135,7 +234,7 @@ describe("ClaudecodeHooks", () => {
       });
 
       const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -153,7 +252,7 @@ describe("ClaudecodeHooks", () => {
 
       const config = { version: 1, hooks: {} };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -162,7 +261,7 @@ describe("ClaudecodeHooks", () => {
 
       await expect(
         ClaudecodeHooks.fromRulesyncHooks({
-          baseDir: testDir,
+          outputRoot: testDir,
           rulesyncHooks,
           validate: false,
         }),
@@ -181,7 +280,7 @@ describe("ClaudecodeHooks", () => {
         hooks: { sessionStart: [{ command: "echo" }] },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -189,7 +288,7 @@ describe("ClaudecodeHooks", () => {
       });
 
       const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -205,7 +304,7 @@ describe("ClaudecodeHooks", () => {
   describe("toRulesyncHooks", () => {
     it("should throw error with descriptive message when content contains invalid JSON", () => {
       const claudecodeHooks = new ClaudecodeHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude",
         relativeFilePath: "settings.json",
         fileContent: "invalid json {",
@@ -219,7 +318,7 @@ describe("ClaudecodeHooks", () => {
 
     it("should convert Claude PascalCase hooks to canonical camelCase", () => {
       const claudecodeHooks = new ClaudecodeHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude",
         relativeFilePath: "settings.json",
         fileContent: JSON.stringify({
@@ -250,7 +349,7 @@ describe("ClaudecodeHooks", () => {
       );
 
       const claudecodeHooks = await ClaudecodeHooks.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
       expect(claudecodeHooks).toBeInstanceOf(ClaudecodeHooks);
@@ -261,7 +360,7 @@ describe("ClaudecodeHooks", () => {
 
     it("should initialize empty hooks when .claude/settings.json does not exist", async () => {
       const claudecodeHooks = await ClaudecodeHooks.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
       expect(claudecodeHooks).toBeInstanceOf(ClaudecodeHooks);
@@ -274,7 +373,7 @@ describe("ClaudecodeHooks", () => {
   describe("isDeletable", () => {
     it("should return false", () => {
       const hooks = new ClaudecodeHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude",
         relativeFilePath: "settings.json",
         fileContent: "{}",
@@ -284,10 +383,237 @@ describe("ClaudecodeHooks", () => {
     });
   });
 
+  describe("fromRulesyncHooks - worktree events", () => {
+    it("should generate WorktreeCreate and WorktreeRemove events", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          worktreeCreate: [{ type: "command", command: ".rulesync/hooks/worktree-create.sh" }],
+          worktreeRemove: [{ type: "command", command: ".rulesync/hooks/worktree-remove.sh" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = claudecodeHooks.getFileContent();
+      const parsed = JSON.parse(content);
+      expect(parsed.hooks.WorktreeCreate).toBeDefined();
+      expect(parsed.hooks.WorktreeRemove).toBeDefined();
+      expect(parsed.hooks.WorktreeCreate[0].hooks[0].command).toContain("worktree-create.sh");
+      expect(parsed.hooks.WorktreeRemove[0].hooks[0].command).toContain("worktree-remove.sh");
+    });
+
+    it("should NOT emit matcher for worktreeCreate and worktreeRemove even if defined in config", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          worktreeCreate: [{ type: "command", command: "create.sh", matcher: "*.js" }],
+          worktreeRemove: [{ type: "command", command: "remove.sh", matcher: "*.ts" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = claudecodeHooks.getFileContent();
+      const parsed = JSON.parse(content);
+      expect(parsed.hooks.WorktreeCreate).toBeDefined();
+      expect(parsed.hooks.WorktreeCreate[0].matcher).toBeUndefined();
+      expect(parsed.hooks.WorktreeRemove).toBeDefined();
+      expect(parsed.hooks.WorktreeRemove[0].matcher).toBeUndefined();
+    });
+
+    it("should NOT emit matcher for messageDisplay even if defined in config", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          messageDisplay: [{ type: "command", command: "display.sh", matcher: "*.md" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = claudecodeHooks.getFileContent();
+      const parsed = JSON.parse(content);
+      expect(parsed.hooks.MessageDisplay).toBeDefined();
+      expect(parsed.hooks.MessageDisplay[0].matcher).toBeUndefined();
+    });
+
+    it("should warn when matcher is defined on worktree events", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const warnSpy = vi.spyOn(logger, "warn");
+
+      const config = {
+        version: 1,
+        hooks: {
+          worktreeCreate: [{ type: "command", command: "create.sh", matcher: "*.js" }],
+          worktreeRemove: [{ type: "command", command: "remove.sh", matcher: "*.ts" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+        logger,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('matcher "*.js" on "worktreeCreate" hook will be ignored'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('matcher "*.ts" on "worktreeRemove" hook will be ignored'),
+      );
+    });
+
+    it("should NOT emit matcher for worktree events in claudecode-specific config", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {},
+        claudecode: {
+          hooks: {
+            worktreeCreate: [
+              { type: "command", command: "create-claude.sh", matcher: "should-be-ignored" },
+            ],
+          },
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = claudecodeHooks.getFileContent();
+      const parsed = JSON.parse(content);
+      expect(parsed.hooks.WorktreeCreate).toBeDefined();
+      expect(parsed.hooks.WorktreeCreate[0].matcher).toBeUndefined();
+    });
+
+    it("should keep matcher for non-worktree events", async () => {
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", "settings.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          sessionStart: [{ type: "command", command: "session.sh", matcher: "*.js" }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const claudecodeHooks = await ClaudecodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = claudecodeHooks.getFileContent();
+      const parsed = JSON.parse(content);
+      expect(parsed.hooks.SessionStart).toBeDefined();
+      expect(parsed.hooks.SessionStart[0].matcher).toBe("*.js");
+    });
+  });
+
+  describe("toRulesyncHooks - worktree events", () => {
+    it("should import WorktreeCreate and WorktreeRemove back to canonical names", () => {
+      const claudecodeHooks = new ClaudecodeHooks({
+        outputRoot: testDir,
+        relativeDirPath: ".claude",
+        relativeFilePath: "settings.json",
+        fileContent: JSON.stringify({
+          hooks: {
+            WorktreeCreate: [
+              { hooks: [{ type: "command", command: "$CLAUDE_PROJECT_DIR/create.sh" }] },
+            ],
+            WorktreeRemove: [
+              { hooks: [{ type: "command", command: "$CLAUDE_PROJECT_DIR/remove.sh" }] },
+            ],
+          },
+        }),
+        validate: false,
+      });
+
+      const rulesyncHooks = claudecodeHooks.toRulesyncHooks();
+      const json = rulesyncHooks.getJson();
+      expect(json.hooks.worktreeCreate).toHaveLength(1);
+      expect(json.hooks.worktreeCreate?.[0]?.command).toContain("create.sh");
+      expect(json.hooks.worktreeRemove).toHaveLength(1);
+      expect(json.hooks.worktreeRemove?.[0]?.command).toContain("remove.sh");
+    });
+  });
+
   describe("forDeletion", () => {
     it("should return ClaudecodeHooks instance with empty hooks for deletion path", () => {
       const hooks = ClaudecodeHooks.forDeletion({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude",
         relativeFilePath: "settings.json",
       });

@@ -1,12 +1,8 @@
 import matter from "gray-matter";
+import { dump, load } from "js-yaml";
 
 import { formatError } from "./error.js";
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object") return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
+import { isPlainObject } from "./type-guards.js";
 
 function deepRemoveNullishValue(value: unknown): unknown {
   if (value === null || value === undefined) {
@@ -51,11 +47,86 @@ function deepRemoveNullishObject(
   return result;
 }
 
+function deepFlattenStringsValue(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "string") {
+    return value.replace(/\n+/g, " ").trim();
+  }
+
+  if (Array.isArray(value)) {
+    const cleanedArray = value
+      .map((item) => deepFlattenStringsValue(item))
+      .filter((item) => item !== undefined);
+    return cleanedArray;
+  }
+
+  if (isPlainObject(value)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      const cleaned = deepFlattenStringsValue(val);
+      if (cleaned !== undefined) {
+        result[key] = cleaned;
+      }
+    }
+    return result;
+  }
+
+  return value;
+}
+
+function deepFlattenStringsObject(
+  obj: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!obj || typeof obj !== "object") {
+    return {};
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    const cleaned = deepFlattenStringsValue(val);
+    if (cleaned !== undefined) {
+      result[key] = cleaned;
+    }
+  }
+  return result;
+}
+
+export type StringifyFrontmatterOptions = {
+  /**
+   * When true, ensures output avoids YAML block scalar indicators (>-, |-)
+   * that simplified frontmatter parsers (e.g. Cursor) cannot handle.
+   * Collapses newlines in string values and disables line wrapping.
+   */
+  avoidBlockScalars?: boolean;
+};
+
 export function stringifyFrontmatter(
   body: string,
   frontmatter: Record<string, unknown> | null | undefined,
+  options?: StringifyFrontmatterOptions,
 ): string {
-  const cleanFrontmatter = deepRemoveNullishObject(frontmatter);
+  const { avoidBlockScalars = false } = options ?? {};
+
+  const cleanFrontmatter = avoidBlockScalars
+    ? deepFlattenStringsObject(frontmatter)
+    : deepRemoveNullishObject(frontmatter);
+
+  if (avoidBlockScalars) {
+    // Use a custom YAML engine with lineWidth disabled to prevent js-yaml from
+    // emitting block scalars (>- or |-). Some tools use simplified frontmatter
+    // parsers that interpret these indicators as literal string values.
+    return matter.stringify(body, cleanFrontmatter, {
+      engines: {
+        yaml: {
+          parse: (input: string) => load(input) ?? {},
+          stringify: (data: object) => dump(data, { lineWidth: -1 }),
+        },
+      },
+    });
+  }
 
   return matter.stringify(body, cleanFrontmatter);
 }
@@ -66,13 +137,19 @@ export function parseFrontmatter(
 ): {
   frontmatter: Record<string, unknown>;
   body: string;
+  hasFrontmatter: boolean;
 } {
   let frontmatter: Record<string, unknown>;
   let body: string;
+  let hasFrontmatter: boolean;
   try {
     const result = matter(content);
     frontmatter = result.data;
     body = result.content;
+    // gray-matter returns an empty .matter string and sets .content equal to
+    // the original input when no YAML frontmatter fence (---) is present.
+    // Use this to detect whether the file actually contained frontmatter.
+    hasFrontmatter = result.matter !== "" || content.trimStart().startsWith("---");
   } catch (error) {
     if (filePath) {
       throw new Error(`Failed to parse frontmatter in ${filePath}: ${formatError(error)}`, {
@@ -85,8 +162,7 @@ export function parseFrontmatter(
   // Strip null/undefined values from parsed frontmatter for consistency.
   // YAML parses bare keys (e.g. "description:") as null, which would fail
   // Zod validation (z.optional(z.string()) does not accept null).
-  // This mirrors the deepRemoveNullishObject cleanup done in stringifyFrontmatter.
   const cleanFrontmatter = deepRemoveNullishObject(frontmatter);
 
-  return { frontmatter: cleanFrontmatter, body };
+  return { frontmatter: cleanFrontmatter, body, hasFrontmatter };
 }
