@@ -1573,7 +1573,9 @@ As this project's AI coding tool, you must follow the additional conventions bel
           relativeDirPathOverride: referencePath.relativeDirPath,
         });
       })();
-      this.logger.debug(`Found ${referenceToolRules.length} reference tool rule files for deletion`);
+      this.logger.debug(
+        `Found ${referenceToolRules.length} reference tool rule files for deletion`,
+      );
 
       return [
         ...rootToolRules,

@@ -1,7 +1,8 @@
 ---
 paths:
-  - '**/*.ts'
+  - "**/*.ts"
 ---
+
 # Coding Guidelines
 
 - If the arguments are multiple, you should use object as the argument.

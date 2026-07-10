@@ -8,7 +8,9 @@ overrides:
   gray-matter>js-yaml: 4.2.0
 
 patchedDependencies:
-  gray-matter@4.0.3: 0e2b238ee6601ee9b92d68bebc85640d09c5c5fb08f0d4d1b832a6084098ff73
+  gray-matter@4.0.3:
+    hash: 0e2b238ee6601ee9b92d68bebc85640d09c5c5fb08f0d4d1b832a6084098ff73
+    path: patches/gray-matter@4.0.3.patch
 
 importers:
 
