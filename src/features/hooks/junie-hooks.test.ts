@@ -45,10 +45,13 @@ describe("JunieHooks", () => {
         hooks: {
           sessionStart: [{ type: "command", command: ".rulesync/hooks/session-start.sh" }],
           beforeSubmitPrompt: [{ type: "command", command: ".rulesync/hooks/prompt.sh" }],
-          stop: [{ type: "command", command: ".rulesync/hooks/audit.sh" }],
-          sessionEnd: [{ type: "command", command: ".rulesync/hooks/session-end.sh" }],
-          // preToolUse is not a Junie-supported event and must be dropped.
           preToolUse: [{ type: "command", command: ".rulesync/hooks/pre-tool.sh" }],
+          stop: [{ type: "command", command: ".rulesync/hooks/audit.sh" }],
+          stopFailure: [{ type: "command", command: ".rulesync/hooks/stop-failure.sh" }],
+          permissionRequest: [{ type: "command", command: ".rulesync/hooks/permission.sh" }],
+          sessionEnd: [{ type: "command", command: ".rulesync/hooks/session-end.sh" }],
+          // postToolUse is not a Junie-supported event and must be dropped.
+          postToolUse: [{ type: "command", command: ".rulesync/hooks/post-tool.sh" }],
         },
       };
       const rulesyncHooks = new RulesyncHooks({
@@ -70,15 +73,24 @@ describe("JunieHooks", () => {
       expect(JSON.stringify(parsed.hooks.SessionStart)).toContain(
         ".rulesync/hooks/session-start.sh",
       );
-      // UserPromptSubmit, Stop, and SessionEnd are now supported.
+      // UserPromptSubmit, PreToolUse, Stop, StopFailure, PermissionRequest, and
+      // SessionEnd are all supported.
       expect(parsed.hooks.UserPromptSubmit).toBeDefined();
       expect(JSON.stringify(parsed.hooks.UserPromptSubmit)).toContain(".rulesync/hooks/prompt.sh");
+      expect(parsed.hooks.PreToolUse).toBeDefined();
+      expect(JSON.stringify(parsed.hooks.PreToolUse)).toContain(".rulesync/hooks/pre-tool.sh");
       expect(parsed.hooks.Stop).toBeDefined();
       expect(JSON.stringify(parsed.hooks.Stop)).toContain(".rulesync/hooks/audit.sh");
+      expect(parsed.hooks.StopFailure).toBeDefined();
+      expect(JSON.stringify(parsed.hooks.StopFailure)).toContain(".rulesync/hooks/stop-failure.sh");
+      expect(parsed.hooks.PermissionRequest).toBeDefined();
+      expect(JSON.stringify(parsed.hooks.PermissionRequest)).toContain(
+        ".rulesync/hooks/permission.sh",
+      );
       expect(parsed.hooks.SessionEnd).toBeDefined();
       expect(JSON.stringify(parsed.hooks.SessionEnd)).toContain(".rulesync/hooks/session-end.sh");
-      // preToolUse is not supported by Junie, so it is dropped.
-      expect(parsed.hooks.PreToolUse).toBeUndefined();
+      // postToolUse is not supported by Junie, so it is dropped.
+      expect(parsed.hooks.PostToolUse).toBeUndefined();
     });
 
     it("should drop matchers on matcher-less events (UserPromptSubmit, Stop) but keep them on SessionStart", async () => {
@@ -151,6 +163,46 @@ describe("JunieHooks", () => {
       expect(parsed.hooks.SessionStart).toBeDefined();
     });
 
+    it("should emit blockOnError/async from canonical failClosed/async", async () => {
+      await ensureDir(join(testDir, ".junie"));
+      await writeFileContent(join(testDir, ".junie", "config.json"), JSON.stringify({}));
+
+      const config = {
+        version: 1,
+        hooks: {
+          sessionStart: [
+            {
+              type: "command",
+              command: ".rulesync/hooks/session-start.sh",
+              failClosed: true,
+              async: false,
+            },
+          ],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const junieHooks = await JunieHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const parsed = JSON.parse(junieHooks.getFileContent());
+      const hook = parsed.hooks.SessionStart[0].hooks[0];
+      // Canonical failClosed → Junie blockOnError; async stays async.
+      expect(hook.blockOnError).toBe(true);
+      expect(hook.async).toBe(false);
+      // The canonical field name must not leak into the Junie output.
+      expect(hook.failClosed).toBeUndefined();
+    });
+
     it("should throw error with descriptive message when existing config.json contains invalid JSON", async () => {
       await ensureDir(join(testDir, ".junie"));
       await writeFileContent(join(testDir, ".junie", "config.json"), "invalid json {");
@@ -220,6 +272,39 @@ describe("JunieHooks", () => {
       const json = rulesyncHooks.getJson();
       expect(json.hooks.sessionStart).toHaveLength(1);
       expect(json.hooks.sessionStart?.[0]?.command).toContain("session-start.sh");
+    });
+
+    it("should import blockOnError/async back into canonical failClosed/async", () => {
+      const junieHooks = new JunieHooks({
+        outputRoot: testDir,
+        relativeDirPath: ".junie",
+        relativeFilePath: "config.json",
+        fileContent: JSON.stringify({
+          hooks: {
+            SessionStart: [
+              {
+                hooks: [
+                  {
+                    type: "command",
+                    command: "session-start.sh",
+                    blockOnError: true,
+                    async: false,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        validate: false,
+      });
+
+      const rulesyncHooks = junieHooks.toRulesyncHooks();
+      const def = rulesyncHooks.getJson().hooks.sessionStart?.[0];
+      // Junie blockOnError → canonical failClosed; async stays async.
+      expect(def?.failClosed).toBe(true);
+      expect(def?.async).toBe(false);
+      // The Junie field name must not survive into the canonical model.
+      expect((def as Record<string, unknown>).blockOnError).toBeUndefined();
     });
 
     it("should throw error with descriptive message when content contains invalid JSON", () => {

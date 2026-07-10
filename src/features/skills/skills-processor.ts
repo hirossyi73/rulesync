@@ -38,6 +38,7 @@ import { KiroSkill } from "./kiro-skill.js";
 import { OpenCodeSkill } from "./opencode-skill.js";
 import { PiSkill } from "./pi-skill.js";
 import { QwencodeSkill } from "./qwencode-skill.js";
+import { ReasonixSkill } from "./reasonix-skill.js";
 import { ReplitSkill } from "./replit-skill.js";
 import { RooSkill } from "./roo-skill.js";
 import { RovodevSkill } from "./rovodev-skill.js";
@@ -185,8 +186,10 @@ export const toolSkillFactories = new Map<SkillsProcessorToolTarget, ToolSkillFa
   [
     "copilot",
     {
+      // GitHub Copilot reads project skills from `.github/skills/` and personal
+      // skills from `~/.copilot/skills/`, so it supports both project and global.
       class: CopilotSkill,
-      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: false },
+      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: true },
     },
   ],
   [
@@ -269,17 +272,19 @@ export const toolSkillFactories = new Map<SkillsProcessorToolTarget, ToolSkillFa
     },
   ],
   [
+    // Kiro reads skills from `.kiro/skills/` (project) and `~/.kiro/skills/`
+    // (global). https://kiro.dev/docs/skills/
     "kiro-cli",
     {
       class: KiroCliSkill,
-      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: false },
+      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: true },
     },
   ],
   [
     "kiro-ide",
     {
       class: KiroIdeSkill,
-      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: false },
+      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: true },
     },
   ],
   [
@@ -302,6 +307,16 @@ export const toolSkillFactories = new Map<SkillsProcessorToolTarget, ToolSkillFa
       // Qwen Code Agent Skills are directories (`<name>/SKILL.md`) under
       // `.qwen/skills/` (project) / `~/.qwen/skills/` (personal/global).
       class: QwencodeSkill,
+      meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: true },
+    },
+  ],
+  [
+    "reasonix",
+    {
+      // DeepSeek-Reasonix discovers directory-layout skills (<name>/SKILL.md)
+      // under .reasonix/skills/ (project) and ~/.reasonix/skills/ (global).
+      // https://github.com/esengine/DeepSeek-Reasonix/blob/main-v2/docs/GUIDE.md
+      class: ReasonixSkill,
       meta: { supportsProject: true, supportsSimulated: false, supportsGlobal: true },
     },
   ],

@@ -3,6 +3,7 @@ import { join, resolve, sep } from "node:path";
 import { Semaphore } from "es-toolkit/promise";
 
 import type { SourceEntry } from "../config/config.js";
+import { SKILL_FILE_NAME } from "../constants/general.js";
 import {
   FETCH_CONCURRENCY_LIMIT,
   MAX_FILE_SIZE,
@@ -433,6 +434,33 @@ function getFirstPathSeparatorIndex(path: string): number {
   return Math.min(slashIndex, backslashIndex);
 }
 
+/**
+ * Decide whether a repository's root-level files should be installed as the
+ * single requested skill (the "root fallback").
+ *
+ * A root fallback fires only when a single, non-wildcard skill was requested,
+ * that skill's own directory is absent, and the repository root actually carries
+ * a `SKILL.md`. Both the git transport (`groupRemoteFilesBySkillRoot`) and the
+ * GitHub transport (`discoverGithubSkillDirs`) gate on these same conditions, so
+ * the decision lives here to keep the two paths from drifting.
+ */
+function shouldUseRootFallback(params: {
+  skillFilter: string[];
+  isWildcard: boolean;
+  hasRootSkillFile: boolean;
+  hasRequestedSkillDir: boolean;
+}): boolean {
+  const { skillFilter, isWildcard, hasRootSkillFile, hasRequestedSkillDir } = params;
+  const [singleSkillName] = skillFilter;
+  return (
+    !isWildcard &&
+    skillFilter.length === 1 &&
+    singleSkillName !== undefined &&
+    hasRootSkillFile &&
+    !hasRequestedSkillDir
+  );
+}
+
 function groupRemoteFilesBySkillRoot(params: {
   remoteFiles: RemoteSkillFile[];
   skillFilter: string[];
@@ -460,11 +488,18 @@ function groupRemoteFilesBySkillRoot(params: {
     grouped.set(skillName, groupedFiles);
   }
 
-  if (grouped.size === 0 && !isWildcard && skillFilter.length === 1) {
-    const [singleSkillName] = skillFilter;
-    if (singleSkillName !== undefined && rootLevelFiles.length > 0) {
-      grouped.set(singleSkillName, rootLevelFiles);
-    }
+  const [singleSkillName] = skillFilter;
+  const hasRootSkillFile = rootLevelFiles.some((file) => file.relativePath === SKILL_FILE_NAME);
+  if (
+    singleSkillName !== undefined &&
+    shouldUseRootFallback({
+      skillFilter,
+      isWildcard,
+      hasRootSkillFile,
+      hasRequestedSkillDir: grouped.has(singleSkillName),
+    })
+  ) {
+    grouped.set(singleSkillName, rootLevelFiles);
   }
 
   return grouped;
@@ -506,10 +541,9 @@ async function resolveGithubFetchRef(params: {
 }
 
 /**
- * Fallback path used when the skills directory has no subdirectories but does
- * contain a single flat skill (root-level files). Fetches and writes that skill
- * into `fetchedSkills`. Returns whether the fallback fired and the resulting
- * remote skill names.
+ * Fallback path used when an explicit single-skill source points at a flat skill
+ * with root-level files. Fetches and writes that skill into `fetchedSkills`.
+ * Returns whether the fallback fired and the resulting remote skill names.
  */
 async function fetchRootLevelFallbackSkill(params: {
   entries: GitHubFileEntry[];
@@ -721,7 +755,18 @@ async function discoverGithubSkillDirs(params: {
       .filter((e) => e.type === "dir")
       .map((e) => ({ name: e.name, path: e.path }));
 
-    if (remoteSkillDirs.length === 0 && !isWildcard && skillFilter.length === 1) {
+    const [singleSkillName] = skillFilter;
+    const hasRequestedSkillDir =
+      singleSkillName !== undefined && remoteSkillDirs.some((d) => d.name === singleSkillName);
+    // Detect a root-level SKILL.md from the directory listing we already have, so
+    // the fallback (and its full root-file fetch) is skipped when there is no
+    // root skill to install — not just when the requested dir is absent.
+    const hasRootSkillFile = entries.some(
+      (entry) => entry.type === "file" && entry.name === SKILL_FILE_NAME,
+    );
+    if (
+      shouldUseRootFallback({ skillFilter, isWildcard, hasRootSkillFile, hasRequestedSkillDir })
+    ) {
       const fallback = await fetchRootLevelFallbackSkill({
         entries,
         parsed,

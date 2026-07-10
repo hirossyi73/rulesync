@@ -33,7 +33,28 @@ type ReasonixPlugin = Record<string, unknown> & {
 // Reasonix declares an external stdio/http plugin (MCP server) as a `[[plugins]]`
 // array-of-tables entry. `type` selects the transport (`stdio` default, `http`
 // a.k.a. `streamable-http`); the remaining fields mirror the standard MCP schema.
-const REASONIX_PLUGIN_FIELDS = ["type", "command", "args", "env", "url", "headers"] as const;
+// `trusted_read_only_tools` is Reasonix-specific: an optional pre-seeded list of
+// raw MCP tool names trusted for planner/read-only use (plan-mode trust, not a
+// per-tool allow/deny list). There is no clean canonical rulesync equivalent, so
+// it round-trips as a passthrough field on the canonical McpServer (a loose
+// zod object, so unknown keys survive), mirroring how other MCP adapters
+// preserve server-specific extra fields they don't deeply model.
+// `call_timeout_seconds` (per-server MCP call timeout) and `tool_timeout_seconds`
+// (a per-tool inline table keyed by raw MCP tool name) are likewise Reasonix-only
+// `[[plugins]]` fields with no canonical equivalent, so they round-trip as
+// passthrough fields too.
+// @see https://github.com/esengine/DeepSeek-Reasonix/blob/main-v2/docs/SPEC.md
+const REASONIX_PLUGIN_FIELDS = [
+  "type",
+  "command",
+  "args",
+  "env",
+  "url",
+  "headers",
+  "trusted_read_only_tools",
+  "call_timeout_seconds",
+  "tool_timeout_seconds",
+] as const;
 
 export class ReasonixMcp extends ToolMcp {
   private readonly toml: ReasonixConfig;
