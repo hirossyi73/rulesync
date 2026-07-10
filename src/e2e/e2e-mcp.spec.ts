@@ -2,30 +2,73 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
+import { load } from "js-yaml";
+import * as smolToml from "smol-toml";
 import { describe, expect, it } from "vitest";
 
-import { RULESYNC_MCP_RELATIVE_FILE_PATH } from "../constants/rulesync-paths.js";
-import { readFileContent, writeFileContent } from "../utils/file.js";
 import {
+  RULESYNC_MCP_RELATIVE_FILE_PATH,
+  RULESYNC_PERMISSIONS_RELATIVE_FILE_PATH,
+} from "../constants/rulesync-paths.js";
+import { McpProcessor } from "../features/mcp/mcp-processor.js";
+import { fileExists, readFileContent, writeFileContent } from "../utils/file.js";
+import {
+  assertGenerateMatrixCoversTargets,
   runGenerate,
+  runImport,
   rulesyncArgs,
   rulesyncCmd,
   useGlobalTestDirectories,
   useTestDirectory,
 } from "./e2e-helper.js";
 
+// Native MCP tools that emit "test-server" (takt writes a transport allowlist instead).
+const mcpGenerateTargets = [
+  { target: "augmentcode", outputPath: join(".augment", "settings.json") },
+  { target: "amp", outputPath: join(".amp", "settings.json") },
+  { target: "claudecode", outputPath: ".mcp.json" },
+  { target: "cursor", outputPath: join(".cursor", "mcp.json") },
+  { target: "qwencode", outputPath: join(".qwen", "settings.json") },
+  { target: "codexcli", outputPath: join(".codex", "config.toml") },
+  { target: "grokcli", outputPath: join(".grok", "config.toml") },
+  { target: "copilot", outputPath: join(".vscode", "mcp.json") },
+  { target: "copilotcli", outputPath: join(".github", "mcp.json") },
+  { target: "opencode", outputPath: "opencode.jsonc" },
+  { target: "deepagents", outputPath: join(".deepagents", ".mcp.json") },
+  { target: "factorydroid", outputPath: join(".factory", "mcp.json") },
+  { target: "goose", outputPath: join(".agents", "plugins", "rulesync", ".mcp.json") },
+  { target: "kilo", outputPath: "kilo.jsonc" },
+  { target: "roo", outputPath: join(".roo", "mcp.json") },
+  { target: "kiro", outputPath: join(".kiro", "settings", "mcp.json") },
+  { target: "kiro-cli", outputPath: join(".kiro", "settings", "mcp.json") },
+  { target: "kiro-ide", outputPath: join(".kiro", "settings", "mcp.json") },
+  { target: "junie", outputPath: join(".junie", "mcp", "mcp.json") },
+  { target: "antigravity-ide", outputPath: join(".agents", "mcp_config.json") },
+  { target: "antigravity-cli", outputPath: join(".agents", "mcp_config.json") },
+  { target: "warp", outputPath: join(".warp", ".mcp.json") },
+  { target: "zed", outputPath: join(".zed", "settings.json") },
+  { target: "devin", outputPath: join(".devin", "config.json") },
+  { target: "vibe", outputPath: join(".vibe", "config.toml") },
+  { target: "reasonix", outputPath: "reasonix.toml" },
+] as const;
+
 describe("E2E: mcp", () => {
   const { getTestDir } = useTestDirectory();
 
-  it.each([
-    { target: "claudecode", outputPath: ".mcp.json" },
-    { target: "cursor", outputPath: join(".cursor", "mcp.json") },
-    { target: "geminicli", outputPath: join(".gemini", "settings.json") },
-    { target: "codexcli", outputPath: join(".codex", "config.toml") },
-  ])("should generate $target mcp", async ({ target, outputPath }) => {
+  it("generate matrix must cover every native mcp tool target", () => {
+    assertGenerateMatrixCoversTargets({
+      processor: McpProcessor,
+      testedTargets: mcpGenerateTargets.map((e) => e.target),
+      // takt only writes a transport allowlist to .takt/config.yaml (no
+      // "test-server" entry), so it is covered by its own dedicated test
+      // "should generate Takt MCP transport allowlist into .takt/config.yaml".
+      untested: ["takt"],
+    });
+  });
+
+  it.each(mcpGenerateTargets)("should generate $target mcp", async ({ target, outputPath }) => {
     const testDir = getTestDir();
 
-    // Setup: Create .rulesync/mcp.json with a test MCP server
     const mcpContent = JSON.stringify(
       {
         mcpServers: {
@@ -43,13 +86,183 @@ describe("E2E: mcp", () => {
     );
     await writeFileContent(join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH), mcpContent);
 
-    // Execute: Generate mcp for the target
     await runGenerate({ target, features: "mcp" });
 
-    // Verify that the expected output file was generated and contains the server
     const generatedContent = await readFileContent(join(testDir, outputPath));
     expect(generatedContent).toContain("test-server");
   });
+
+  it("should co-locate amp mcp and permissions in a single settings.json on a clean repo", async () => {
+    const testDir = getTestDir();
+
+    // Setup: both an MCP source and a permissions source, no pre-existing Amp settings file.
+    await writeFileContent(
+      join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": { type: "stdio", command: "echo", args: ["hello"], env: {} },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFileContent(
+      join(testDir, RULESYNC_PERMISSIONS_RELATIVE_FILE_PATH),
+      JSON.stringify({ permission: { edit_file: { "*": "deny" } } }, null, 2),
+    );
+
+    // Execute: generate both features together for Amp.
+    await runGenerate({ target: "amp", features: "mcp,permissions" });
+
+    // Both adapters default to settings.json, so the keys must co-locate there and
+    // no stray settings.jsonc should be created.
+    expect(await fileExists(join(testDir, ".amp", "settings.jsonc"))).toBe(false);
+    const content = JSON.parse(await readFileContent(join(testDir, ".amp", "settings.json")));
+    expect(content["amp.mcpServers"]).toHaveProperty("test-server");
+    expect(content["amp.tools.disable"]).toEqual(["edit_file"]);
+  });
+
+  it("should co-locate devin mcp and permissions in a single .devin/config.json", async () => {
+    const testDir = getTestDir();
+
+    // Setup: both an MCP source and a permissions source, no pre-existing Devin config.
+    await writeFileContent(
+      join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": { type: "stdio", command: "echo", args: ["hello"], env: {} },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFileContent(
+      join(testDir, RULESYNC_PERMISSIONS_RELATIVE_FILE_PATH),
+      JSON.stringify({ permission: { bash: { "rm *": "deny" } } }, null, 2),
+    );
+
+    // Execute: generate both features together for Devin. Whichever runs second
+    // must read-modify-write the shared config.json without dropping the other's key.
+    await runGenerate({ target: "devin", features: "mcp,permissions" });
+
+    const content = JSON.parse(await readFileContent(join(testDir, ".devin", "config.json")));
+    expect(content.mcpServers).toHaveProperty("test-server");
+    expect(content.permissions.deny).toContain("Exec(rm *)");
+  });
+
+  it.each([
+    // amp, codexcli, grokcli, opencode, kilo, devin use merged config files
+    // (isDeletable=false) — excluded
+    { target: "claudecode", orphanPath: ".mcp.json" },
+    { target: "cursor", orphanPath: join(".cursor", "mcp.json") },
+    { target: "copilot", orphanPath: join(".vscode", "mcp.json") },
+    { target: "copilotcli", orphanPath: join(".github", "mcp.json") },
+    { target: "deepagents", orphanPath: join(".deepagents", ".mcp.json") },
+    { target: "factorydroid", orphanPath: join(".factory", "mcp.json") },
+    { target: "roo", orphanPath: join(".roo", "mcp.json") },
+    { target: "kiro", orphanPath: join(".kiro", "settings", "mcp.json") },
+    { target: "junie", orphanPath: join(".junie", "mcp", "mcp.json") },
+    { target: "goose", orphanPath: join(".agents", "plugins", "rulesync", ".mcp.json") },
+  ])(
+    "should fail in check mode when delete would remove an orphan $target mcp file",
+    async ({ target, orphanPath }) => {
+      const testDir = getTestDir();
+
+      await writeFileContent(join(testDir, ".rulesync", ".gitkeep"), "");
+      await writeFileContent(
+        join(testDir, ".rulesync", "mcp.json"),
+        JSON.stringify({ mcpServers: {} }),
+      );
+      const orphanContent = JSON.stringify(
+        { mcpServers: { "orphan-server": { command: "echo", args: ["orphan"] } } },
+        null,
+        2,
+      );
+      await writeFileContent(join(testDir, orphanPath), orphanContent);
+
+      await expect(
+        runGenerate({
+          target,
+          features: "mcp",
+          deleteFiles: true,
+          check: true,
+          env: { NODE_ENV: "e2e" },
+        }),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining(
+          "Files are not up to date. Run 'rulesync generate' to update.",
+        ),
+      });
+
+      expect(await readFileContent(join(testDir, orphanPath))).toBe(orphanContent);
+    },
+  );
+
+  it.each([
+    {
+      target: "amp",
+      outputPath: join(".amp", "settings.json"),
+      content: JSON.stringify({ "amp.dangerouslyAllowAll": false, "amp.mcpServers": {} }, null, 2),
+    },
+    {
+      target: "codexcli",
+      outputPath: join(".codex", "config.toml"),
+      content: '[ui]\ntheme = "dark"\n',
+    },
+    {
+      target: "grokcli",
+      outputPath: join(".grok", "config.toml"),
+      content: '[ui]\ntheme = "dark"\n',
+    },
+    {
+      target: "opencode",
+      outputPath: "opencode.jsonc",
+      content: JSON.stringify({ theme: "dark", mcp: {} }, null, 2),
+    },
+    {
+      target: "kilo",
+      outputPath: "kilo.jsonc",
+      content: JSON.stringify({ theme: "dark", mcp: {} }, null, 2),
+    },
+    {
+      target: "vibe",
+      outputPath: join(".vibe", "config.toml"),
+      content: 'theme = "dark"\n',
+    },
+    {
+      target: "reasonix",
+      outputPath: "reasonix.toml",
+      content: 'default_model = "deepseek"\n',
+    },
+    {
+      target: "takt",
+      outputPath: join(".takt", "config.yaml"),
+      content: "provider: claude\n",
+    },
+  ])(
+    "should succeed in check mode when a $target mcp file is non-deletable",
+    async ({ target, outputPath, content }) => {
+      const testDir = getTestDir();
+
+      await writeFileContent(join(testDir, ".rulesync", ".gitkeep"), "");
+      await writeFileContent(join(testDir, outputPath), content);
+
+      const { stdout } = await runGenerate({
+        target,
+        features: "mcp",
+        deleteFiles: true,
+        check: true,
+        env: { NODE_ENV: "e2e" },
+      });
+
+      expect(stdout).toContain("All files are up to date.");
+    },
+  );
 
   it("should run mcp command as daemon without errors", async () => {
     const testDir = getTestDir();
@@ -87,20 +300,408 @@ describe("E2E: mcp", () => {
     // Verify that there were no actual errors (warnings are acceptable)
     expect(hasError, `MCP daemon produced errors: ${stderrOutput}`).toBe(false);
   });
+
+  it("should generate Vibe MCP and permissions into shared config.toml", async () => {
+    const testDir = getTestDir();
+
+    await writeFileContent(
+      join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": {
+              type: "stdio",
+              command: "echo",
+              args: ["hello"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFileContent(
+      join(testDir, ".rulesync", "permissions.json"),
+      JSON.stringify(
+        {
+          permission: {
+            bash: { "*": "ask", "git *": "allow" },
+            edit: { "*": "deny" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await runGenerate({ target: "vibe", features: "mcp,permissions" });
+
+    const parsed = toTable(
+      smolToml.parse(await readFileContent(join(testDir, ".vibe", "config.toml"))),
+    );
+    const tools = toTable(parsed.tools);
+    const bash = toTable(tools.bash);
+    expect(toTableArray(parsed.mcp_servers)).toMatchObject([
+      { name: "test-server", command: "echo" },
+    ]);
+    expect(bash.permission).toBe("ask");
+    expect(bash.allowlist).toEqual(["git *"]);
+    expect(parsed.disabled_tools).toContain("write_file");
+  });
+
+  it("should generate Takt MCP transport allowlist into .takt/config.yaml", async () => {
+    const testDir = getTestDir();
+
+    // Pre-seed an unrelated key so the in-place merge can be asserted.
+    await writeFileContent(join(testDir, ".takt", "config.yaml"), "provider: claude\n");
+
+    await writeFileContent(
+      join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": { type: "stdio", command: "echo", args: ["hello"] },
+            "remote-server": { type: "http", url: "https://example.com/mcp" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await runGenerate({ target: "takt", features: "mcp" });
+
+    const parsed = toTable(
+      load(await readFileContent(join(testDir, ".takt", "config.yaml"))) as Record<string, unknown>,
+    );
+    // The default-deny transport allowlist reflects the servers' transports.
+    expect(toTable(parsed.workflow_mcp_servers)).toEqual({ stdio: true, sse: false, http: true });
+    // The unrelated key is preserved by the in-place merge.
+    expect(parsed.provider).toBe("claude");
+    // Server definitions are NOT representable in config.yaml and are not written.
+    const raw = await readFileContent(join(testDir, ".takt", "config.yaml"));
+    expect(raw).not.toContain("test-server");
+    expect(raw).not.toContain("remote-server");
+  });
+
+  it("should generate Reasonix MCP into reasonix.toml as [[plugins]] entries", async () => {
+    const testDir = getTestDir();
+
+    await writeFileContent(
+      join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": {
+              type: "stdio",
+              command: "echo",
+              args: ["hello"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await runGenerate({ target: "reasonix", features: "mcp" });
+
+    const parsed = toTable(smolToml.parse(await readFileContent(join(testDir, "reasonix.toml"))));
+    expect(toTableArray(parsed.plugins)).toMatchObject([
+      { name: "test-server", type: "stdio", command: "echo", args: ["hello"] },
+    ]);
+  });
 });
+
+describe("E2E: mcp (import)", () => {
+  const { getTestDir } = useTestDirectory();
+
+  it.each([
+    { target: "augmentcode", sourcePath: join(".augment", "settings.json") },
+    { target: "claudecode", sourcePath: ".mcp.json" },
+    { target: "cursor", sourcePath: join(".cursor", "mcp.json") },
+    // copilot MCP uses VS Code-specific format — excluded from import test
+    { target: "copilotcli", sourcePath: join(".github", "mcp.json") },
+    { target: "deepagents", sourcePath: join(".deepagents", ".mcp.json") },
+    { target: "factorydroid", sourcePath: join(".factory", "mcp.json") },
+    { target: "roo", sourcePath: join(".roo", "mcp.json") },
+    { target: "kiro", sourcePath: join(".kiro", "settings", "mcp.json") },
+    { target: "junie", sourcePath: join(".junie", "mcp", "mcp.json") },
+    // Amp stores servers under the `amp.mcpServers` key inside the shared
+    // settings file, so the source content shape differs from the other targets.
+    {
+      target: "amp",
+      sourcePath: join(".amp", "settings.jsonc"),
+      sourceContent: JSON.stringify(
+        {
+          "amp.mcpServers": {
+            "test-server": {
+              command: "echo",
+              args: ["hello"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    },
+    { target: "antigravity-ide", sourcePath: join(".agents", "mcp_config.json") },
+    { target: "antigravity-cli", sourcePath: join(".agents", "mcp_config.json") },
+    { target: "warp", sourcePath: join(".warp", ".mcp.json") },
+    { target: "devin", sourcePath: join(".devin", "config.json") },
+  ])("should import $target mcp", async ({ target, sourcePath, sourceContent }) => {
+    const testDir = getTestDir();
+
+    const mcpContent =
+      sourceContent ??
+      JSON.stringify(
+        {
+          mcpServers: {
+            "test-server": {
+              command: "echo",
+              args: ["hello"],
+            },
+          },
+        },
+        null,
+        2,
+      );
+    await writeFileContent(join(testDir, sourcePath), mcpContent);
+
+    await runImport({ target, features: "mcp" });
+
+    const importedContent = await readFileContent(join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH));
+    expect(importedContent).toContain("test-server");
+  });
+
+  it("should import vibe mcp from config.toml", async () => {
+    const testDir = getTestDir();
+
+    await writeFileContent(
+      join(testDir, ".vibe", "config.toml"),
+      [
+        'theme = "dark"',
+        "",
+        "[[mcp_servers]]",
+        'name = "test-server"',
+        'transport = "stdio"',
+        'command = "echo"',
+        'args = ["hello"]',
+      ].join("\n"),
+    );
+
+    await runImport({ target: "vibe", features: "mcp" });
+
+    const importedContent = await readFileContent(join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH));
+    expect(importedContent).toContain("test-server");
+    expect(importedContent).toContain("hello");
+  });
+
+  it("should import reasonix mcp from reasonix.toml", async () => {
+    const testDir = getTestDir();
+
+    await writeFileContent(
+      join(testDir, "reasonix.toml"),
+      [
+        'default_model = "deepseek"',
+        "",
+        "[[plugins]]",
+        'name = "test-server"',
+        'type = "stdio"',
+        'command = "echo"',
+        'args = ["hello"]',
+      ].join("\n"),
+    );
+
+    await runImport({ target: "reasonix", features: "mcp" });
+
+    const importedContent = await readFileContent(join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH));
+    expect(importedContent).toContain("test-server");
+    expect(importedContent).toContain("hello");
+  });
+
+  // Zed stores MCP servers under `context_servers` (not `mcpServers`) inside a
+  // shared settings.json, so it needs a bespoke source rather than the generic
+  // `mcpServers`-seeded import case above.
+  it("should import zed mcp from context_servers", async () => {
+    const testDir = getTestDir();
+
+    const settingsContent = JSON.stringify(
+      {
+        private_files: ["**/.env"],
+        context_servers: {
+          "test-server": { command: "echo", args: ["hello"] },
+        },
+      },
+      null,
+      2,
+    );
+    await writeFileContent(join(testDir, ".zed", "settings.json"), settingsContent);
+
+    await runImport({ target: "zed", features: "mcp" });
+
+    const importedContent = await readFileContent(join(testDir, RULESYNC_MCP_RELATIVE_FILE_PATH));
+    expect(importedContent).toContain("test-server");
+  });
+});
+
+// Native global-scope MCP tools that emit "test-server" (takt writes a transport allowlist instead).
+const mcpGlobalTargets = [
+  { target: "augmentcode", outputPath: join(".augment", "settings.json") },
+  { target: "claudecode", outputPath: ".claude.json" },
+  { target: "cursor", outputPath: join(".cursor", "mcp.json") },
+  { target: "qwencode", outputPath: join(".qwen", "settings.json") },
+  { target: "goose", outputPath: join(".config", "goose", "config.yaml") },
+  { target: "hermesagent", outputPath: join(".hermes", "config.yaml") },
+  { target: "opencode", outputPath: join(".config", "opencode", "opencode.jsonc") },
+  { target: "codexcli", outputPath: join(".codex", "config.toml") },
+  { target: "grokcli", outputPath: join(".grok", "config.toml") },
+  { target: "copilotcli", outputPath: join(".copilot", "mcp-config.json") },
+  { target: "deepagents", outputPath: join(".deepagents", ".mcp.json") },
+  { target: "factorydroid", outputPath: join(".factory", "mcp.json") },
+  { target: "rovodev", outputPath: join(".rovodev", "mcp.json") },
+  {
+    target: "cline",
+    outputPath: join(".cline", "data", "settings", "cline_mcp_settings.json"),
+  },
+  { target: "kilo", outputPath: join(".config", "kilo", "kilo.jsonc") },
+  { target: "junie", outputPath: join(".junie", "mcp", "mcp.json") },
+  { target: "amp", outputPath: join(".config", "amp", "settings.json") },
+  {
+    target: "antigravity-ide",
+    outputPath: join(".gemini", "config", "mcp_config.json"),
+  },
+  {
+    target: "antigravity-cli",
+    outputPath: join(".gemini", "config", "mcp_config.json"),
+  },
+  { target: "warp", outputPath: join(".warp", ".mcp.json") },
+  { target: "zed", outputPath: join(".config", "zed", "settings.json") },
+  {
+    target: "devin",
+    outputPath: join(".config", "devin", "config.json"),
+  },
+  { target: "vibe", outputPath: join(".vibe", "config.toml") },
+  { target: "reasonix", outputPath: join(".reasonix", "config.toml") },
+  { target: "kiro", outputPath: join(".kiro", "settings", "mcp.json") },
+  { target: "kiro-cli", outputPath: join(".kiro", "settings", "mcp.json") },
+  { target: "kiro-ide", outputPath: join(".kiro", "settings", "mcp.json") },
+] as const;
 
 describe("E2E: mcp (global mode)", () => {
   const { getProjectDir, getHomeDir } = useGlobalTestDirectories();
 
-  it.each([
-    { target: "claudecode", outputPath: join(".claude", ".claude.json") },
-    { target: "geminicli", outputPath: join(".gemini", "settings.json") },
-    { target: "opencode", outputPath: join(".config", "opencode", "opencode.jsonc") },
-  ])("should generate $target mcp in home directory", async ({ target, outputPath }) => {
+  it("generate matrix must cover every native mcp tool target in global mode", () => {
+    assertGenerateMatrixCoversTargets({
+      processor: McpProcessor,
+      testedTargets: mcpGlobalTargets.map((e) => e.target),
+      global: true,
+      // takt only writes a transport allowlist to ~/.takt/config.yaml (no
+      // "test-server" entry), so it is covered by its own dedicated global test
+      // "should generate Takt MCP transport allowlist into ~/.takt/config.yaml (global)".
+      untested: ["takt"],
+    });
+  });
+
+  it.each(mcpGlobalTargets)(
+    "should generate $target mcp in home directory",
+    async ({ target, outputPath }) => {
+      const projectDir = getProjectDir();
+      const homeDir = getHomeDir();
+
+      const mcpContent = JSON.stringify(
+        {
+          root: true,
+          mcpServers: {
+            "test-server": {
+              description: "Test MCP server",
+              type: "stdio",
+              command: "echo",
+              args: ["hello"],
+              env: {},
+            },
+          },
+        },
+        null,
+        2,
+      );
+      await writeFileContent(join(projectDir, RULESYNC_MCP_RELATIVE_FILE_PATH), mcpContent);
+
+      await runGenerate({
+        target,
+        features: "mcp",
+        global: true,
+        env: { HOME_DIR: homeDir },
+      });
+
+      const generatedContent = await readFileContent(join(homeDir, outputPath));
+      expect(generatedContent).toContain("test-server");
+    },
+  );
+
+  it("should generate Takt MCP transport allowlist into ~/.takt/config.yaml (global)", async () => {
     const projectDir = getProjectDir();
     const homeDir = getHomeDir();
 
-    // Setup: Create .rulesync/mcp.json with root: true and a test MCP server
+    await writeFileContent(
+      join(projectDir, RULESYNC_MCP_RELATIVE_FILE_PATH),
+      JSON.stringify(
+        {
+          root: true,
+          mcpServers: {
+            "test-server": { type: "sse", url: "https://example.com/sse" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await runGenerate({
+      target: "takt",
+      features: "mcp",
+      global: true,
+      env: { HOME_DIR: homeDir },
+    });
+
+    const parsed = toTable(
+      load(await readFileContent(join(homeDir, ".takt", "config.yaml"))) as Record<string, unknown>,
+    );
+    expect(toTable(parsed.workflow_mcp_servers)).toEqual({ stdio: false, sse: true, http: false });
+  });
+
+  it("should preserve legacy ~/.claude/.claude.json when writing to recommended path (global)", async () => {
+    // Pins both behaviors end-to-end: (a) canonical ~/.claude.json receives
+    // fresh mcpServers AND preserves Claude Code's own user-config keys via
+    // RMW; (b) legacy ~/.claude/.claude.json is byte-identical after
+    // generate (matches the no-destructive-action invariant from PR #333).
+    const projectDir = getProjectDir();
+    const homeDir = getHomeDir();
+
+    // Pre-seed the canonical ~/.claude.json with Claude Code's own keys.
+    await writeFileContent(
+      join(homeDir, ".claude.json"),
+      JSON.stringify(
+        {
+          mcpServers: { "previously-managed": { command: "node" } },
+          projects: { "/home/user/proj-a": { allowedTools: ["*"] } },
+          feedbackSurveyState: { lastShownAt: 1234567890 },
+        },
+        null,
+        2,
+      ),
+    );
+
+    // Pre-seed a legacy orphan with specific content for byte-identical check.
+    const legacyPath = join(homeDir, ".claude", ".claude.json");
+    const legacyContent = JSON.stringify(
+      { mcpServers: { "stale-server": { command: "node", args: ["stale.js"] } } },
+      null,
+      2,
+    );
+    await writeFileContent(legacyPath, legacyContent);
+
+    // Source: a fresh server in .rulesync/mcp.json.
     const mcpContent = JSON.stringify(
       {
         root: true,
@@ -119,17 +720,26 @@ describe("E2E: mcp (global mode)", () => {
     );
     await writeFileContent(join(projectDir, RULESYNC_MCP_RELATIVE_FILE_PATH), mcpContent);
 
-    // Execute: Generate mcp in global mode with HOME pointed to temp dir
     await runGenerate({
-      target,
+      target: "claudecode",
       features: "mcp",
       global: true,
       env: { HOME_DIR: homeDir },
     });
 
-    // Verify that the expected output file was generated and contains the server
-    const generatedContent = await readFileContent(join(homeDir, outputPath));
-    expect(generatedContent).toContain("test-server");
+    // Canonical ~/.claude.json has fresh mcpServers from rulesync and
+    // retains Claude Code's own user-config keys via RMW spread.
+    const newContent = await readFileContent(join(homeDir, ".claude.json"));
+    expect(newContent).toContain("test-server");
+    expect(newContent).not.toContain("previously-managed");
+    expect(newContent).toContain("projects");
+    expect(newContent).toContain("/home/user/proj-a");
+    expect(newContent).toContain("feedbackSurveyState");
+    expect(newContent).toContain("1234567890");
+
+    // Legacy file is preserved byte-for-byte. rulesync never modifies it.
+    expect(await fileExists(legacyPath)).toBe(true);
+    expect(await readFileContent(legacyPath)).toBe(legacyContent);
   });
 
   it("should ignore non-root mcp in global mode", async () => {
@@ -180,8 +790,22 @@ describe("E2E: mcp (global mode)", () => {
     });
 
     // Verify: root mcp content is present, non-root mcp content is absent
-    const generatedContent = await readFileContent(join(homeDir, ".claude", ".claude.json"));
+    const generatedContent = await readFileContent(join(homeDir, ".claude.json"));
     expect(generatedContent).toContain("root-server");
     expect(generatedContent).not.toContain("non-root-server");
   });
 });
+
+function toTable(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return { ...value };
+  }
+  return {};
+}
+
+function toTableArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(toTable);
+}

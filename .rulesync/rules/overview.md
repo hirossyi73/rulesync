@@ -25,6 +25,7 @@ This is Rulesync, a Node.js CLI tool that automatically generates configuration 
   - You must run `pnpm cicheck` before committing to verify quality.
   - You must not use here documents because it causes a sandbox error.
   - You must not use `--no-verify` option because it skips pre-commit checks and causes serious security issues.
+  - When creating a PR, you should include a link in the PR description that associates the PR with its issue.
 - When you read or search the codebase:
   - You should check Serena MCP server tools, and use those actively.
 - About the `skills/` directory at the repository root:
@@ -32,3 +33,5 @@ This is Rulesync, a Node.js CLI tool that automatically generates configuration 
   - It is NOT the same as `.rulesync/skills/`, which holds the project's own skill definitions used during generation.
   - Do not modify the root `skills/` directory unless you intend to change the official skills distributed to users.
 - The contents of `docs/` and `skills/rulesync/` are automatically synchronized by `scripts/sync-skill-docs.ts`. Be aware that their content may overlap.
+- Always preserve the existence of end-to-end happy-path test cases that cover the Tool × Feature matrix.
+- When researching topics, if the built-in webfetch tool cannot retrieve a page's content (e.g., because the page is a SPA), use the `playwright-cli` skill instead.

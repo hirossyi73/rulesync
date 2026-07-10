@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths-ignore: &paths-ignore
       - "docs/**"
+      - "!docs/.vitepress/config.ts"
       - "images/**"
       - ".devcontainer/**"
       - "LICENSE"
@@ -27,9 +28,12 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Setup mise
-        uses: jdx/mise-action@e79ddf65a11cec7b0e882bedced08d6e976efb2d # v3.6.2
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           experimental: true
+
+      - name: Setup Takumi Guard npm registry
+        uses: flatt-security/setup-takumi-guard-npm@9a5d797c2085b6326d3a2985c08e3a114b9b88c1 # v1
 
       - name: Install dependencies
         run: pnpm install --ignore-scripts

@@ -1,6 +1,10 @@
 import { join } from "node:path";
 
-import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
+import {
+  CLINE_COMMANDS_DIR_PATH,
+  CLINE_COMMANDS_GLOBAL_DIR_PATH,
+} from "../../constants/cline-paths.js";
+import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
 import { RulesyncCommand, RulesyncCommandFrontmatter } from "./rulesync-command.js";
@@ -12,18 +16,16 @@ import {
   ToolCommandSettablePaths,
 } from "./tool-command.js";
 
-export type ClineCommandParams = AiFileParams;
-
 export class ClineCommand extends ToolCommand {
   static getSettablePaths({ global }: { global?: boolean } = {}): ToolCommandSettablePaths {
     if (global) {
       return {
-        relativeDirPath: join("Documents", "Cline", "Workflows"),
+        relativeDirPath: CLINE_COMMANDS_GLOBAL_DIR_PATH,
       };
     }
 
     return {
-      relativeDirPath: join(".clinerules", "workflows"),
+      relativeDirPath: CLINE_COMMANDS_DIR_PATH,
     };
   }
 
@@ -33,7 +35,7 @@ export class ClineCommand extends ToolCommand {
     };
 
     return new RulesyncCommand({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       frontmatter: rulesyncFrontmatter,
       body: this.getFileContent(),
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -44,7 +46,7 @@ export class ClineCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
     global = false,
@@ -52,7 +54,7 @@ export class ClineCommand extends ToolCommand {
     const paths = this.getSettablePaths({ global });
 
     return new ClineCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       fileContent: rulesyncCommand.getBody(),
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: rulesyncCommand.getRelativeFilePath(),
@@ -76,19 +78,19 @@ export class ClineCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolCommandFromFileParams): Promise<ClineCommand> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
 
     const fileContent = await readFileContent(filePath);
     const { body: content } = parseFrontmatter(fileContent, filePath);
 
     return new ClineCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       fileContent: content.trim(),
@@ -97,12 +99,12 @@ export class ClineCommand extends ToolCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): ClineCommand {
     return new ClineCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

@@ -3,11 +3,12 @@ import { CommandsProcessor } from "../features/commands/commands-processor.js";
 import { HooksProcessor } from "../features/hooks/hooks-processor.js";
 import { IgnoreProcessor } from "../features/ignore/ignore-processor.js";
 import { McpProcessor } from "../features/mcp/mcp-processor.js";
+import { PermissionsProcessor } from "../features/permissions/permissions-processor.js";
 import { RulesProcessor } from "../features/rules/rules-processor.js";
 import { SkillsProcessor } from "../features/skills/skills-processor.js";
 import { SubagentsProcessor } from "../features/subagents/subagents-processor.js";
 import type { ToolTarget } from "../types/tool-targets.js";
-import { logger } from "../utils/logger.js";
+import type { Logger } from "../utils/logger.js";
 
 export type ImportResult = {
   rulesCount: number;
@@ -17,6 +18,7 @@ export type ImportResult = {
   subagentsCount: number;
   skillsCount: number;
   hooksCount: number;
+  permissionsCount: number;
 };
 
 /**
@@ -25,16 +27,18 @@ export type ImportResult = {
 export async function importFromTool(params: {
   config: Config;
   tool: ToolTarget;
+  logger: Logger;
 }): Promise<ImportResult> {
-  const { config, tool } = params;
+  const { config, tool, logger } = params;
 
-  const rulesCount = await importRulesCore({ config, tool });
-  const ignoreCount = await importIgnoreCore({ config, tool });
-  const mcpCount = await importMcpCore({ config, tool });
-  const commandsCount = await importCommandsCore({ config, tool });
-  const subagentsCount = await importSubagentsCore({ config, tool });
-  const skillsCount = await importSkillsCore({ config, tool });
-  const hooksCount = await importHooksCore({ config, tool });
+  const rulesCount = await importRulesCore({ config, tool, logger });
+  const ignoreCount = await importIgnoreCore({ config, tool, logger });
+  const mcpCount = await importMcpCore({ config, tool, logger });
+  const commandsCount = await importCommandsCore({ config, tool, logger });
+  const subagentsCount = await importSubagentsCore({ config, tool, logger });
+  const skillsCount = await importSkillsCore({ config, tool, logger });
+  const hooksCount = await importHooksCore({ config, tool, logger });
+  const permissionsCount = await importPermissionsCore({ config, tool, logger });
 
   return {
     rulesCount,
@@ -44,11 +48,16 @@ export async function importFromTool(params: {
     subagentsCount,
     skillsCount,
     hooksCount,
+    permissionsCount,
   };
 }
 
-async function importRulesCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importRulesCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("rules")) {
     return 0;
@@ -63,9 +72,10 @@ async function importRulesCore(params: { config: Config; tool: ToolTarget }): Pr
   }
 
   const rulesProcessor = new RulesProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global,
+    logger,
   });
 
   const toolFiles = await rulesProcessor.loadToolFiles();
@@ -84,8 +94,12 @@ async function importRulesCore(params: { config: Config; tool: ToolTarget }): Pr
   return writtenCount;
 }
 
-async function importIgnoreCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importIgnoreCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("ignore")) {
     return 0;
@@ -101,8 +115,10 @@ async function importIgnoreCore(params: { config: Config; tool: ToolTarget }): P
   }
 
   const ignoreProcessor = new IgnoreProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
+    logger,
+    featureOptions: config.getFeatureOptions(tool, "ignore"),
   });
 
   const toolFiles = await ignoreProcessor.loadToolFiles();
@@ -125,8 +141,12 @@ async function importIgnoreCore(params: { config: Config; tool: ToolTarget }): P
   return writtenCount;
 }
 
-async function importMcpCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importMcpCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("mcp")) {
     return 0;
@@ -141,9 +161,10 @@ async function importMcpCore(params: { config: Config; tool: ToolTarget }): Prom
   }
 
   const mcpProcessor = new McpProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global,
+    logger,
   });
 
   const toolFiles = await mcpProcessor.loadToolFiles();
@@ -162,8 +183,12 @@ async function importMcpCore(params: { config: Config; tool: ToolTarget }): Prom
   return writtenCount;
 }
 
-async function importCommandsCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importCommandsCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("commands")) {
     return 0;
@@ -178,9 +203,10 @@ async function importCommandsCore(params: { config: Config; tool: ToolTarget }):
   }
 
   const commandsProcessor = new CommandsProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global,
+    logger,
   });
 
   const toolFiles = await commandsProcessor.loadToolFiles();
@@ -199,8 +225,12 @@ async function importCommandsCore(params: { config: Config; tool: ToolTarget }):
   return writtenCount;
 }
 
-async function importSubagentsCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importSubagentsCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("subagents")) {
     return 0;
@@ -214,9 +244,10 @@ async function importSubagentsCore(params: { config: Config; tool: ToolTarget })
   }
 
   const subagentsProcessor = new SubagentsProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global: config.getGlobal(),
+    logger,
   });
 
   const toolFiles = await subagentsProcessor.loadToolFiles();
@@ -235,8 +266,12 @@ async function importSubagentsCore(params: { config: Config; tool: ToolTarget })
   return writtenCount;
 }
 
-async function importSkillsCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importSkillsCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("skills")) {
     return 0;
@@ -251,9 +286,10 @@ async function importSkillsCore(params: { config: Config; tool: ToolTarget }): P
   }
 
   const skillsProcessor = new SkillsProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global,
+    logger,
   });
 
   const toolDirs = await skillsProcessor.loadToolDirs();
@@ -272,8 +308,12 @@ async function importSkillsCore(params: { config: Config; tool: ToolTarget }): P
   return writtenCount;
 }
 
-async function importHooksCore(params: { config: Config; tool: ToolTarget }): Promise<number> {
-  const { config, tool } = params;
+async function importHooksCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
 
   if (!config.getFeatures(tool).includes("hooks")) {
     return 0;
@@ -293,9 +333,10 @@ async function importHooksCore(params: { config: Config; tool: ToolTarget }): Pr
   }
 
   const hooksProcessor = new HooksProcessor({
-    baseDir: config.getBaseDirs()[0] ?? ".",
+    outputRoot: config.getOutputRoots()[0] ?? ".",
     toolTarget: tool,
     global,
+    logger,
   });
 
   const toolFiles = await hooksProcessor.loadToolFiles();
@@ -309,6 +350,55 @@ async function importHooksCore(params: { config: Config; tool: ToolTarget }): Pr
 
   if (config.getVerbose() && writtenCount > 0) {
     logger.success(`Created ${writtenCount} hooks file(s)`);
+  }
+
+  return writtenCount;
+}
+
+async function importPermissionsCore(params: {
+  config: Config;
+  tool: ToolTarget;
+  logger: Logger;
+}): Promise<number> {
+  const { config, tool, logger } = params;
+
+  if (!config.getFeatures(tool).includes("permissions")) {
+    return 0;
+  }
+
+  const allTargets = PermissionsProcessor.getToolTargets({ global: config.getGlobal() });
+  const importableTargets = PermissionsProcessor.getToolTargets({
+    global: config.getGlobal(),
+    importOnly: true,
+  });
+
+  if (!allTargets.includes(tool)) {
+    return 0;
+  }
+
+  if (!importableTargets.includes(tool)) {
+    logger.warn(`Import is not supported for ${tool} permissions. Skipping.`);
+    return 0;
+  }
+
+  const permissionsProcessor = new PermissionsProcessor({
+    outputRoot: config.getOutputRoots()[0] ?? ".",
+    toolTarget: tool,
+    global: config.getGlobal(),
+    logger,
+  });
+
+  const toolFiles = await permissionsProcessor.loadToolFiles();
+  if (toolFiles.length === 0) {
+    logger.warn(`No permissions files found for ${tool}. Skipping import.`);
+    return 0;
+  }
+
+  const rulesyncFiles = await permissionsProcessor.convertToolFilesToRulesyncFiles(toolFiles);
+  const { count: writtenCount } = await permissionsProcessor.writeAiFiles(rulesyncFiles);
+
+  if (config.getVerbose() && writtenCount > 0) {
+    logger.success(`Created ${writtenCount} permissions file(s)`);
   }
 
   return writtenCount;

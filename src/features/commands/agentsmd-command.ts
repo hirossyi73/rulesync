@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { AGENTSMD_COMMANDS_DIR_PATH } from "../../constants/agentsmd-paths.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContent } from "../../utils/file.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
@@ -15,27 +16,27 @@ import {
 export class AgentsmdCommand extends SimulatedCommand {
   static getSettablePaths(): ToolCommandSettablePaths {
     return {
-      relativeDirPath: join(".agents", "commands"),
+      relativeDirPath: AGENTSMD_COMMANDS_DIR_PATH,
     };
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
   }: ToolCommandFromRulesyncCommandParams): AgentsmdCommand {
     return new AgentsmdCommand(
-      this.fromRulesyncCommandDefault({ baseDir, rulesyncCommand, validate }),
+      this.fromRulesyncCommandDefault({ outputRoot, rulesyncCommand, validate }),
     );
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolCommandFromFileParams): Promise<AgentsmdCommand> {
     const filePath = join(
-      baseDir,
+      outputRoot,
       AgentsmdCommand.getSettablePaths().relativeDirPath,
       relativeFilePath,
     );
@@ -48,7 +49,7 @@ export class AgentsmdCommand extends SimulatedCommand {
     }
 
     return new AgentsmdCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: AgentsmdCommand.getSettablePaths().relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -65,12 +66,12 @@ export class AgentsmdCommand extends SimulatedCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): AgentsmdCommand {
     return new AgentsmdCommand(
-      this.forDeletionDefault({ baseDir, relativeDirPath, relativeFilePath }),
+      this.forDeletionDefault({ outputRoot, relativeDirPath, relativeFilePath }),
     );
   }
 }

@@ -193,7 +193,7 @@ Test content`;
 
       const cursorRule = CursorRule.fromRulesyncRule({
         rulesyncRule,
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(cursorRule.getFrontmatter()).toEqual({
@@ -262,7 +262,7 @@ Test content`;
 
       const cursorRule = CursorRule.fromRulesyncRule({
         rulesyncRule,
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(cursorRule.getFrontmatter().description).toBeUndefined();
@@ -397,7 +397,7 @@ This is the rule content
       await writeFileContent(filePath, fileContent);
 
       const rule = await CursorRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "test.mdc",
       });
 
@@ -410,6 +410,112 @@ This is the rule content
       expect(rule.getRelativeFilePath()).toBe("test.mdc");
     });
 
+    it("should round-trip a description containing YAML-special characters", async () => {
+      // A description with a ": " sequence (and other YAML indicators) must be emitted
+      // as a quoted scalar; otherwise the generated frontmatter is invalid YAML and
+      // fromFile throws when reading it back. See the constructor stringify path.
+      const description = "Use this rule: enforce strict TypeScript settings";
+      const generated = new CursorRule({
+        frontmatter: { description, globs: "*.ts", alwaysApply: false },
+        body: "Always enable strict mode.",
+        relativeDirPath: ".cursor/rules",
+        relativeFilePath: "strict.mdc",
+      });
+
+      const filePath = join(testDir, ".cursor/rules", "strict.mdc");
+      await writeFileContent(filePath, generated.getFileContent());
+
+      const parsed = await CursorRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "strict.mdc",
+      });
+
+      expect(parsed.getFrontmatter()).toEqual({
+        description,
+        globs: "*.ts",
+        alwaysApply: false,
+      });
+      expect(parsed.getBody()).toBe("Always enable strict mode.");
+    });
+
+    it("should flatten a multi-line description into a single-line scalar Cursor can read", async () => {
+      // A genuinely multi-line description must NOT serialize to a YAML block scalar
+      // (`description: |-`): Cursor's simplified MDC parser does not read block-scalar
+      // indicators. The newlines are flattened to spaces before serialization.
+      const generated = new CursorRule({
+        frontmatter: { description: "Line one\nLine two", globs: "*.ts", alwaysApply: false },
+        body: "Body.",
+        relativeDirPath: ".cursor/rules",
+        relativeFilePath: "multiline.mdc",
+      });
+
+      const content = generated.getFileContent();
+      // No block-scalar indicator, and the value is on a single line.
+      expect(content).not.toContain("description: |");
+      expect(content).not.toContain("description: >");
+      expect(content).toContain("description: Line one Line two");
+
+      const filePath = join(testDir, ".cursor/rules", "multiline.mdc");
+      await writeFileContent(filePath, content);
+      const parsed = await CursorRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "multiline.mdc",
+      });
+      expect(parsed.getFrontmatter()).toEqual({
+        description: "Line one Line two",
+        globs: "*.ts",
+        alwaysApply: false,
+      });
+    });
+
+    it("should flatten and still quote a multi-line description containing YAML indicators", async () => {
+      // The riskiest combination: newlines AND injection-significant characters. The
+      // value must be flattened to one line AND quoted so it cannot break out of the
+      // frontmatter.
+      const generated = new CursorRule({
+        frontmatter: {
+          description: "Line one: foo\n---\nalwaysApply: true",
+          globs: "*.ts",
+          alwaysApply: false,
+        },
+        body: "Body.",
+        relativeDirPath: ".cursor/rules",
+        relativeFilePath: "tricky.mdc",
+      });
+
+      const content = generated.getFileContent();
+      expect(content).not.toContain("description: |");
+      // The flattened value is quoted (single line), keeping `---`/`alwaysApply:`
+      // safely inside the scalar.
+      expect(content).toContain("description: 'Line one: foo --- alwaysApply: true'");
+
+      const filePath = join(testDir, ".cursor/rules", "tricky.mdc");
+      await writeFileContent(filePath, content);
+      const parsed = await CursorRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "tricky.mdc",
+      });
+      expect(parsed.getFrontmatter()).toEqual({
+        description: "Line one: foo --- alwaysApply: true",
+        globs: "*.ts",
+        alwaysApply: false,
+      });
+    });
+
+    it("should pass a non-string description through unchanged when validation is skipped", () => {
+      // On the validate: false path a non-string description must not throw (the flatten
+      // guard skips it) and is serialized as-is by js-yaml.
+      const generated = new CursorRule({
+        frontmatter: { description: 123 as unknown as string },
+        body: "Body.",
+        relativeDirPath: ".cursor/rules",
+        relativeFilePath: "non-string.mdc",
+        validate: false,
+      });
+
+      expect(generated.getFileContent()).toContain("description: 123");
+    });
+
     it("should handle file with no frontmatter", async () => {
       const filePath = join(testDir, ".cursor/rules", "simple.mdc");
       const content = "Just plain content without frontmatter";
@@ -417,7 +523,7 @@ This is the rule content
       await writeFileContent(filePath, content);
 
       const rule = await CursorRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "simple.mdc",
       });
 
@@ -436,7 +542,7 @@ This is the rule content
 
       await expect(
         CursorRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "invalid.mdc",
         }),
       ).rejects.toThrow(/Invalid frontmatter/);
@@ -451,7 +557,7 @@ This is the rule content
       await writeFileContent(filePath, content);
 
       const rule = await CursorRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "invalid.mdc",
         validate: false,
       });
@@ -678,7 +784,7 @@ This is the rule content
   describe("isTargetedByRulesyncRule", () => {
     it("should return true for rules targeting cursor", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -692,7 +798,7 @@ This is the rule content
 
     it("should return true for rules targeting all tools (*)", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -706,7 +812,7 @@ This is the rule content
 
     it("should return false for rules not targeting cursor", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -720,7 +826,7 @@ This is the rule content
 
     it("should return false for empty targets", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -734,7 +840,7 @@ This is the rule content
 
     it("should handle mixed targets including cursor", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -748,7 +854,7 @@ This is the rule content
 
     it("should handle undefined targets in frontmatter", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {},
@@ -829,7 +935,7 @@ This is the rule content
       // Write to disk and re-read
       await writeFileContent(filePath, rule.getFileContent());
       const reimported = await CursorRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "no-desc.mdc",
       });
 
@@ -853,7 +959,7 @@ Rule with null description`;
 
       // Should NOT throw a Zod validation error
       const rule = await CursorRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "null-desc.mdc",
       });
 

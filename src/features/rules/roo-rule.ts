@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { ROO_DIR } from "../../constants/roo-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncRule } from "./rulesync-rule.js";
@@ -8,12 +9,9 @@ import {
   ToolRuleForDeletionParams,
   ToolRuleFromFileParams,
   ToolRuleFromRulesyncRuleParams,
-  ToolRuleParams,
   ToolRuleSettablePaths,
   buildToolPath,
 } from "./tool-rule.js";
-
-export type RooRuleParams = ToolRuleParams;
 
 export type RooRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & {
   nonRoot: {
@@ -27,6 +25,11 @@ export type RooRuleSettablePaths = Omit<ToolRuleSettablePaths, "root"> & {
  * Generates rule files for Roo Code's hierarchical rule system.
  * Supports plain Markdown without frontmatter, mode-specific rules,
  * and both directory-based and single-file configurations.
+ *
+ * - Project scope writes the non-root directory `.roo/rules/`.
+ * - Global scope writes the same non-root directory resolved under the home
+ *   directory (`~/.roo/rules/`), which Roo loads before workspace rules.
+ *   @see https://roocodeinc.github.io/Roo-Code/features/custom-instructions
  */
 export class RooRule extends ToolRule {
   static getSettablePaths(
@@ -35,24 +38,27 @@ export class RooRule extends ToolRule {
       excludeToolDir?: boolean;
     } = {},
   ): RooRuleSettablePaths {
+    // The relative directory is identical for project and global scope; global
+    // mode differs only by output root (the home directory), so `~/.roo/rules/`
+    // is produced without a separate branch here.
     return {
       nonRoot: {
-        relativeDirPath: buildToolPath(".roo", "rules", _options.excludeToolDir),
+        relativeDirPath: buildToolPath(ROO_DIR, "rules", _options.excludeToolDir),
       },
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolRuleFromFileParams): Promise<RooRule> {
     const fileContent = await readFileContent(
-      join(baseDir, this.getSettablePaths().nonRoot.relativeDirPath, relativeFilePath),
+      join(outputRoot, this.getSettablePaths().nonRoot.relativeDirPath, relativeFilePath),
     );
 
     return new RooRule({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().nonRoot.relativeDirPath,
       relativeFilePath: relativeFilePath,
       fileContent,
@@ -62,13 +68,13 @@ export class RooRule extends ToolRule {
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
   }: ToolRuleFromRulesyncRuleParams): RooRule {
     return new RooRule(
       this.buildToolRuleParamsDefault({
-        baseDir,
+        outputRoot,
         rulesyncRule,
         validate,
         nonRootPath: this.getSettablePaths().nonRoot,
@@ -108,12 +114,12 @@ export class RooRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolRuleForDeletionParams): RooRule {
     return new RooRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

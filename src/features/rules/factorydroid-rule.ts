@@ -1,5 +1,9 @@
 import { join } from "node:path";
 
+import {
+  FACTORYDROID_DIR,
+  FACTORYDROID_RULE_FILE_NAME,
+} from "../../constants/factorydroid-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncRule } from "./rulesync-rule.js";
@@ -45,24 +49,24 @@ export class FactorydroidRule extends ToolRule {
     if (global) {
       return {
         root: {
-          relativeDirPath: buildToolPath(".factory", ".", excludeToolDir),
-          relativeFilePath: "AGENTS.md",
+          relativeDirPath: buildToolPath(FACTORYDROID_DIR, ".", excludeToolDir),
+          relativeFilePath: FACTORYDROID_RULE_FILE_NAME,
         },
       };
     }
     return {
       root: {
         relativeDirPath: ".",
-        relativeFilePath: "AGENTS.md",
+        relativeFilePath: FACTORYDROID_RULE_FILE_NAME,
       },
       nonRoot: {
-        relativeDirPath: buildToolPath(".factory", "rules", excludeToolDir),
+        relativeDirPath: buildToolPath(FACTORYDROID_DIR, "rules", excludeToolDir),
       },
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
@@ -72,10 +76,10 @@ export class FactorydroidRule extends ToolRule {
 
     if (isRoot) {
       const relativePath = join(paths.root.relativeDirPath, paths.root.relativeFilePath);
-      const fileContent = await readFileContent(join(baseDir, relativePath));
+      const fileContent = await readFileContent(join(outputRoot, relativePath));
 
       return new FactorydroidRule({
-        baseDir,
+        outputRoot,
         relativeDirPath: paths.root.relativeDirPath,
         relativeFilePath: paths.root.relativeFilePath,
         fileContent,
@@ -89,9 +93,9 @@ export class FactorydroidRule extends ToolRule {
     }
 
     const relativePath = join(paths.nonRoot.relativeDirPath, relativeFilePath);
-    const fileContent = await readFileContent(join(baseDir, relativePath));
+    const fileContent = await readFileContent(join(outputRoot, relativePath));
     return new FactorydroidRule({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.nonRoot.relativeDirPath,
       relativeFilePath,
       fileContent,
@@ -101,7 +105,7 @@ export class FactorydroidRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
     global = false,
@@ -112,7 +116,7 @@ export class FactorydroidRule extends ToolRule {
       relativeDirPath === paths.root.relativeDirPath;
 
     return new FactorydroidRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",
@@ -122,7 +126,7 @@ export class FactorydroidRule extends ToolRule {
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
     global = false,
@@ -130,7 +134,7 @@ export class FactorydroidRule extends ToolRule {
     const paths = this.getSettablePaths({ global });
     return new FactorydroidRule(
       this.buildToolRuleParamsAgentsmd({
-        baseDir,
+        outputRoot,
         rulesyncRule,
         validate,
         rootPath: paths.root,

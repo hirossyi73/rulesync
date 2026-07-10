@@ -14,30 +14,186 @@ const RulesyncSkillFrontmatterSchemaInternal = z.looseObject({
   name: z.string(),
   description: z.string(),
   targets: z._default(RulesyncTargetsSchema, ["*"]),
+  // Default for tools that support the flag (claudecode, cursor, zed, pi, qwencode, factorydroid).
+  // A target-section value of the same key overrides this default.
+  "disable-model-invocation": z.optional(z.boolean()),
+  // Default for tools that support the flag (claudecode, qwencode, vibe, factorydroid).
+  // A target-section value of the same key overrides this default.
+  "user-invocable": z.optional(z.boolean()),
   claudecode: z.optional(
     z.looseObject({
-      "allowed-tools": z.optional(z.array(z.string())),
+      when_to_use: z.optional(z.string()),
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+      "disallowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
       model: z.optional(z.string()),
+      effort: z.optional(z.string()),
+      "argument-hint": z.optional(z.string()),
+      arguments: z.optional(z.union([z.string(), z.array(z.string())])),
+      context: z.optional(z.string()),
+      agent: z.optional(z.string()),
+      hooks: z.optional(z.looseObject({})),
+      shell: z.optional(z.string()),
       "disable-model-invocation": z.optional(z.boolean()),
+      "user-invocable": z.optional(z.boolean()),
+      "scheduled-task": z.optional(z.boolean()),
+      paths: z.optional(z.union([z.string(), z.array(z.string())])),
     }),
   ),
   codexcli: z.optional(
     z.looseObject({
       "short-description": z.optional(z.string()),
+      // Fields emitted to the `agents/openai.yaml` sidecar next to SKILL.md.
+      // See https://developers.openai.com/codex/skills.md
+      interface: z.optional(
+        z.looseObject({
+          display_name: z.optional(z.string()),
+          short_description: z.optional(z.string()),
+          icon_small: z.optional(z.string()),
+          icon_large: z.optional(z.string()),
+          brand_color: z.optional(z.string()),
+          default_prompt: z.optional(z.string()),
+        }),
+      ),
+      policy: z.optional(
+        z.looseObject({
+          allow_implicit_invocation: z.optional(z.boolean()),
+        }),
+      ),
+      dependencies: z.optional(
+        z.looseObject({
+          tools: z.optional(
+            z.array(
+              z.looseObject({
+                type: z.optional(z.string()),
+                value: z.optional(z.string()),
+                description: z.optional(z.string()),
+                transport: z.optional(z.string()),
+                url: z.optional(z.string()),
+              }),
+            ),
+          ),
+        }),
+      ),
     }),
   ),
   opencode: z.optional(
     z.looseObject({
       "allowed-tools": z.optional(z.array(z.string())),
+      license: z.optional(z.string()),
+      // OpenCode documents `compatibility` as a free-form string; the object
+      // form stays accepted for back-compat. See https://opencode.ai/docs/skills/
+      compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+      metadata: z.optional(z.looseObject({})),
+    }),
+  ),
+  kilo: z.optional(
+    z.looseObject({
+      // `allowed-tools` is not part of Kilo's official SKILL.md frontmatter; it is
+      // retained for backward compatibility with existing rulesync skill files.
+      "allowed-tools": z.optional(z.array(z.string())),
+      license: z.optional(z.string()),
+      compatibility: z.optional(z.looseObject({})),
+      metadata: z.optional(z.looseObject({})),
+    }),
+  ),
+  deepagents: z.optional(
+    z.looseObject({
+      "allowed-tools": z.optional(z.array(z.string())),
+      license: z.optional(z.string()),
+      // The Agent Skills spec defines `compatibility` as a free-form string
+      // (1–500 chars); an object form is also tolerated for back-compat.
+      compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+      metadata: z.optional(z.looseObject({})),
     }),
   ),
   copilot: z.optional(
     z.looseObject({
       license: z.optional(z.string()),
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+    }),
+  ),
+  copilotcli: z.optional(
+    z.looseObject({
+      license: z.optional(z.string()),
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+      "argument-hint": z.optional(z.string()),
+    }),
+  ),
+  pi: z.optional(
+    z.looseObject({
+      "allowed-tools": z.optional(z.array(z.string())),
+      "disable-model-invocation": z.optional(z.boolean()),
+      license: z.optional(z.string()),
+      compatibility: z.optional(z.looseObject({})),
+      metadata: z.optional(z.looseObject({})),
+    }),
+  ),
+  zed: z.optional(
+    z.looseObject({
+      "disable-model-invocation": z.optional(z.boolean()),
+    }),
+  ),
+  replit: z.optional(
+    z.looseObject({
+      "allowed-tools": z.optional(z.array(z.string())),
+      license: z.optional(z.string()),
+      compatibility: z.optional(z.looseObject({})),
+      metadata: z.optional(z.looseObject({})),
     }),
   ),
   cline: z.optional(z.looseObject({})),
   roo: z.optional(z.looseObject({})),
+  rovodev: z.optional(
+    z.looseObject({
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+      license: z.optional(z.string()),
+      // The Agent Skills spec defines `compatibility` as a free-form string
+      // (1–500 chars); the object form stays accepted for back-compat.
+      compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+      metadata: z.optional(z.looseObject({})),
+    }),
+  ),
+  cursor: z.optional(
+    z.looseObject({
+      paths: z.optional(z.union([z.string(), z.array(z.string())])),
+      "disable-model-invocation": z.optional(z.boolean()),
+      metadata: z.optional(z.looseObject({})),
+    }),
+  ),
+  factorydroid: z.optional(
+    z.looseObject({
+      "disable-model-invocation": z.optional(z.boolean()),
+      "user-invocable": z.optional(z.boolean()),
+    }),
+  ),
+  agentsskills: z.optional(
+    z.looseObject({
+      license: z.optional(z.string()),
+      // The Agent Skills spec defines `compatibility` as a free-form string
+      // (1–500 chars); the object form stays accepted for back-compat.
+      compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+      metadata: z.optional(z.looseObject({})),
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+    }),
+  ),
+  vibe: z.optional(
+    z.looseObject({
+      license: z.optional(z.string()),
+      compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+      metadata: z.optional(z.looseObject({})),
+      "user-invocable": z.optional(z.boolean()),
+      "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
+    }),
+  ),
+  takt: z.optional(
+    z.looseObject({
+      // Rename the emitted file stem (e.g. "test-skill.md" → "{name}.md").
+      name: z.optional(z.string()),
+      // Facet inheritance: emit a leading `{extends:<parent>}` directive (Takt 0.39.0+).
+      // Skills map to the `knowledge` facet, which supports inheritance.
+      extends: z.optional(z.string()),
+    }),
+  ),
 });
 
 // Export schema with targets optional for input but guaranteed in output
@@ -48,22 +204,122 @@ export type RulesyncSkillFrontmatterInput = {
   name: string;
   description: string;
   targets?: ("*" | string)[];
+  "disable-model-invocation"?: boolean;
+  "user-invocable"?: boolean;
   claudecode?: {
-    "allowed-tools"?: string[];
+    when_to_use?: string;
+    "allowed-tools"?: string | string[];
+    "disallowed-tools"?: string | string[];
     model?: string;
+    effort?: string;
+    "argument-hint"?: string;
+    arguments?: string | string[];
+    context?: string;
+    agent?: string;
+    hooks?: Record<string, unknown>;
+    shell?: string;
     "disable-model-invocation"?: boolean;
+    "user-invocable"?: boolean;
+    "scheduled-task"?: boolean;
+    paths?: string | string[];
   };
   codexcli?: {
     "short-description"?: string;
+    interface?: {
+      display_name?: string;
+      short_description?: string;
+      icon_small?: string;
+      icon_large?: string;
+      brand_color?: string;
+      default_prompt?: string;
+    };
+    policy?: {
+      allow_implicit_invocation?: boolean;
+    };
+    dependencies?: {
+      tools?: Array<{
+        type?: string;
+        value?: string;
+        description?: string;
+        transport?: string;
+        url?: string;
+      }>;
+    };
   };
   opencode?: {
     "allowed-tools"?: string[];
+    license?: string;
+    compatibility?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  };
+  kilo?: {
+    "allowed-tools"?: string[];
+  };
+  deepagents?: {
+    "allowed-tools"?: string[];
+    license?: string;
+    compatibility?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
   };
   copilot?: {
     license?: string;
+    "allowed-tools"?: string | string[];
+  };
+  copilotcli?: {
+    license?: string;
+    "allowed-tools"?: string | string[];
+    "argument-hint"?: string;
+  };
+  pi?: {
+    "allowed-tools"?: string[];
+    "disable-model-invocation"?: boolean;
+    license?: string;
+    compatibility?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  };
+  zed?: {
+    "disable-model-invocation"?: boolean;
+  };
+  replit?: {
+    "allowed-tools"?: string[];
+    license?: string;
+    compatibility?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
   };
   roo?: Record<string, unknown>;
   cline?: Record<string, unknown>;
+  rovodev?: {
+    "allowed-tools"?: string | string[];
+    license?: string;
+    compatibility?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  };
+  cursor?: {
+    paths?: string | string[];
+    "disable-model-invocation"?: boolean;
+    metadata?: Record<string, unknown>;
+  };
+  factorydroid?: {
+    "disable-model-invocation"?: boolean;
+    "user-invocable"?: boolean;
+  };
+  agentsskills?: {
+    license?: string;
+    compatibility?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    "allowed-tools"?: string | string[];
+  };
+  vibe?: {
+    license?: string;
+    compatibility?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    "user-invocable"?: boolean;
+    "allowed-tools"?: string | string[];
+  };
+  takt?: {
+    name?: string;
+    extends?: string;
+  };
 };
 
 // Type for output/validated data (targets is always present after validation)
@@ -75,7 +331,7 @@ export type RulesyncSkillFrontmatter = z.infer<typeof RulesyncSkillFrontmatterSc
 export type SkillFile = AiDirFile;
 
 export type RulesyncSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: RulesyncSkillFrontmatterInput;
@@ -90,7 +346,7 @@ export type RulesyncSkillSettablePaths = {
 };
 
 export type RulesyncSkillFromDirParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   global?: boolean;
@@ -102,7 +358,7 @@ export type RulesyncSkillFromDirParams = {
  */
 export class RulesyncSkill extends AiDir {
   constructor({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath = RULESYNC_SKILLS_RELATIVE_DIR_PATH,
     dirName,
     frontmatter,
@@ -112,7 +368,7 @@ export class RulesyncSkill extends AiDir {
     global = false,
   }: RulesyncSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -134,7 +390,7 @@ export class RulesyncSkill extends AiDir {
 
   static getSettablePaths(): RulesyncSkillSettablePaths {
     // Rulesync skills use the same relative path for both project and global modes
-    // The actual location differs based on baseDir:
+    // The actual location differs based on outputRoot:
     // - Project mode: {process.cwd()}/.rulesync/skills/
     // - Global mode: {getHomeDirectory()}/.rulesync/skills/
     return {
@@ -169,12 +425,12 @@ export class RulesyncSkill extends AiDir {
   }
 
   static async fromDir({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath = RULESYNC_SKILLS_RELATIVE_DIR_PATH,
     dirName,
     global = false,
   }: RulesyncSkillFromDirParams): Promise<RulesyncSkill> {
-    const skillDirPath = join(baseDir, relativeDirPath, dirName);
+    const skillDirPath = join(outputRoot, relativeDirPath, dirName);
     const skillFilePath = join(skillDirPath, SKILL_FILE_NAME);
 
     if (!(await fileExists(skillFilePath))) {
@@ -182,21 +438,31 @@ export class RulesyncSkill extends AiDir {
     }
 
     const fileContent = await readFileContent(skillFilePath);
-    const { frontmatter, body: content } = parseFrontmatter(fileContent, skillFilePath);
+    const {
+      frontmatter,
+      body: content,
+      hasFrontmatter,
+    } = parseFrontmatter(fileContent, skillFilePath);
+
+    if (!hasFrontmatter) {
+      throw new Error(
+        `Missing frontmatter in ${skillFilePath}. Rulesync files must begin with a YAML frontmatter block delimited by '---'.`,
+      );
+    }
 
     const result = RulesyncSkillFrontmatterSchema.safeParse(frontmatter);
     if (!result.success) {
       throw new Error(`Invalid frontmatter in ${skillFilePath}: ${formatError(result.error)}`);
     }
     const otherFiles = await this.collectOtherFiles(
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       SKILL_FILE_NAME,
     );
 
     return new RulesyncSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       frontmatter: result.data,

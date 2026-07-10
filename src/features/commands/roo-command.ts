@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { optional, z } from "zod/mini";
 
+import { ROO_COMMANDS_DIR_PATH } from "../../constants/roo-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContent } from "../../utils/file.js";
@@ -18,6 +19,9 @@ import {
 export const RooCommandFrontmatterSchema = z.looseObject({
   description: z.optional(z.string()),
   "argument-hint": optional(z.string()),
+  // Mode slug (e.g. "code", "architect") to switch to before running the command body.
+  // https://roocodeinc.github.io/Roo-Code/features/slash-commands
+  mode: z.optional(z.string()),
 });
 
 export type RooCommandFrontmatter = z.infer<typeof RooCommandFrontmatterSchema>;
@@ -37,7 +41,7 @@ export class RooCommand extends ToolCommand {
 
   static getSettablePaths(): RooCommandSettablePaths {
     return {
-      relativeDirPath: join(".roo", "commands"),
+      relativeDirPath: ROO_COMMANDS_DIR_PATH,
     };
   }
 
@@ -83,7 +87,7 @@ export class RooCommand extends ToolCommand {
     const fileContent = stringifyFrontmatter(this.body, rulesyncFrontmatter);
 
     return new RulesyncCommand({
-      baseDir: ".", // RulesyncCommand baseDir is always the project root directory
+      outputRoot: ".", // RulesyncCommand outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -94,7 +98,7 @@ export class RooCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
   }: ToolCommandFromRulesyncCommandParams): RooCommand {
@@ -113,7 +117,7 @@ export class RooCommand extends ToolCommand {
     const fileContent = stringifyFrontmatter(body, rooFrontmatter);
 
     return new RooCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: rooFrontmatter,
       body,
       relativeDirPath: RooCommand.getSettablePaths().relativeDirPath,
@@ -150,11 +154,15 @@ export class RooCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolCommandFromFileParams): Promise<RooCommand> {
-    const filePath = join(baseDir, RooCommand.getSettablePaths().relativeDirPath, relativeFilePath);
+    const filePath = join(
+      outputRoot,
+      RooCommand.getSettablePaths().relativeDirPath,
+      relativeFilePath,
+    );
     // Read file content
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
@@ -166,7 +174,7 @@ export class RooCommand extends ToolCommand {
     }
 
     return new RooCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: RooCommand.getSettablePaths().relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -177,12 +185,12 @@ export class RooCommand extends ToolCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): RooCommand {
     return new RooCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { description: "" },

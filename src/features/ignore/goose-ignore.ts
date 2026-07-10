@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { GOOSE_IGNORE_FILE_NAME } from "../../constants/goose-paths.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncIgnore } from "./rulesync-ignore.js";
 import {
@@ -24,7 +25,7 @@ export class GooseIgnore extends ToolIgnore {
   static getSettablePaths(): ToolIgnoreSettablePaths {
     return {
       relativeDirPath: ".",
-      relativeFilePath: ".gooseignore",
+      relativeFilePath: GOOSE_IGNORE_FILE_NAME,
     };
   }
 
@@ -39,13 +40,13 @@ export class GooseIgnore extends ToolIgnore {
    * Create GooseIgnore from RulesyncIgnore
    */
   static fromRulesyncIgnore({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncIgnore,
   }: ToolIgnoreFromRulesyncIgnoreParams): GooseIgnore {
     const body = rulesyncIgnore.getFileContent();
 
     return new GooseIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: body,
@@ -56,19 +57,19 @@ export class GooseIgnore extends ToolIgnore {
    * Load GooseIgnore from .gooseignore file
    */
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolIgnoreFromFileParams): Promise<GooseIgnore> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new GooseIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -77,12 +78,12 @@ export class GooseIgnore extends ToolIgnore {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolIgnoreForDeletionParams): GooseIgnore {
     return new GooseIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

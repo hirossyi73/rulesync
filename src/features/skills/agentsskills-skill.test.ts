@@ -31,17 +31,70 @@ describe("AgentsSkillsSkill", () => {
       expect(paths.relativeDirPath).toBe(join(".agents", "skills"));
     });
 
-    it("should throw error when global is true", () => {
-      expect(() => AgentsSkillsSkill.getSettablePaths({ global: true })).toThrow(
-        "AgentsSkillsSkill does not support global mode.",
-      );
+    it("should return the same .agents/skills path in global mode (resolved under home)", () => {
+      // The Agent Skills standard defines `~/.agents/skills/` as the personal location.
+      const paths = AgentsSkillsSkill.getSettablePaths({ global: true });
+      expect(paths.relativeDirPath).toBe(join(".agents", "skills"));
+    });
+
+    it("should carry standard optional frontmatter through the agentsskills section", () => {
+      const skill = new AgentsSkillsSkill({
+        outputRoot: testDir,
+        dirName: "std-skill",
+        frontmatter: {
+          name: "std-skill",
+          description: "Standard",
+          license: "MIT",
+          compatibility: { "agent-skills": ">=1.0.0" },
+          metadata: { version: "1.2.3" },
+          "allowed-tools": "shell",
+        },
+        body: "Body",
+        validate: true,
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().agentsskills).toEqual({
+        license: "MIT",
+        compatibility: { "agent-skills": ">=1.0.0" },
+        metadata: { version: "1.2.3" },
+        "allowed-tools": "shell",
+      });
+
+      const roundTripped = AgentsSkillsSkill.fromRulesyncSkill({ rulesyncSkill });
+      const fm = roundTripped.getFrontmatter();
+      expect(fm.license).toBe("MIT");
+      expect(fm["allowed-tools"]).toBe("shell");
+      expect(fm.metadata).toEqual({ version: "1.2.3" });
+    });
+
+    it("should carry a string compatibility value through the agentsskills section", () => {
+      const skill = new AgentsSkillsSkill({
+        outputRoot: testDir,
+        dirName: "string-compat-skill",
+        frontmatter: {
+          name: "string-compat-skill",
+          description: "Standard",
+          compatibility: "Requires Python 3.14+ and uv",
+        },
+        body: "Body",
+        validate: true,
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().agentsskills).toEqual({
+        compatibility: "Requires Python 3.14+ and uv",
+      });
+
+      const roundTripped = AgentsSkillsSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(roundTripped.getFrontmatter().compatibility).toBe("Requires Python 3.14+ and uv");
     });
   });
 
   describe("constructor", () => {
     it("should create instance with valid content", () => {
       const skill = new AgentsSkillsSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".agents", "skills"),
         dirName: "test-skill",
         frontmatter: {
@@ -74,7 +127,7 @@ This is the body of the agent skill.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), skillContent);
 
       const skill = await AgentsSkillsSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "test-skill",
       });
 
@@ -86,13 +139,33 @@ This is the body of the agent skill.`;
       });
     });
 
+    it("should import a SKILL.md with a string compatibility value (Agent Skills spec form)", async () => {
+      const skillDir = join(testDir, ".agents", "skills", "string-compat-skill");
+      await ensureDir(skillDir);
+      const skillContent = `---
+name: string-compat-skill
+description: Spec-compliant skill
+compatibility: Requires Python 3.14+ and uv
+---
+
+Body.`;
+      await writeFileContent(join(skillDir, SKILL_FILE_NAME), skillContent);
+
+      const skill = await AgentsSkillsSkill.fromDir({
+        outputRoot: testDir,
+        dirName: "string-compat-skill",
+      });
+
+      expect(skill.getFrontmatter().compatibility).toBe("Requires Python 3.14+ and uv");
+    });
+
     it("should throw error when SKILL.md not found", async () => {
       const skillDir = join(testDir, ".agents", "skills", "empty-skill");
       await ensureDir(skillDir);
 
       await expect(
         AgentsSkillsSkill.fromDir({
-          baseDir: testDir,
+          outputRoot: testDir,
           dirName: "empty-skill",
         }),
       ).rejects.toThrow(/SKILL\.md not found/);
@@ -102,7 +175,7 @@ This is the body of the agent skill.`;
   describe("fromRulesyncSkill", () => {
     it("should create instance from RulesyncSkill", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "test-skill",
         frontmatter: {
@@ -130,7 +203,7 @@ This is the body of the agent skill.`;
   describe("isTargetedByRulesyncSkill", () => {
     it("should return true when targets includes '*'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "all-targets-skill",
         frontmatter: {
@@ -147,7 +220,7 @@ This is the body of the agent skill.`;
 
     it("should return true when targets includes 'agentsskills'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "agentsskills-skill",
         frontmatter: {
@@ -164,7 +237,7 @@ This is the body of the agent skill.`;
 
     it("should return false when targets does not include 'agentsskills'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "claudecode-only-skill",
         frontmatter: {
@@ -183,7 +256,7 @@ This is the body of the agent skill.`;
   describe("toRulesyncSkill", () => {
     it("should convert to RulesyncSkill", () => {
       const skill = new AgentsSkillsSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".agents", "skills"),
         dirName: "test-skill",
         frontmatter: {
@@ -218,14 +291,14 @@ This is the body of the agent skill.`;
       expect(skill.getGlobal()).toBe(false);
     });
 
-    it("should use process.cwd() as default baseDir", () => {
+    it("should use process.cwd() as default outputRoot", () => {
       const skill = AgentsSkillsSkill.forDeletion({
         dirName: "cleanup",
         relativeDirPath: join(".agents", "skills"),
       });
 
       expect(skill).toBeInstanceOf(AgentsSkillsSkill);
-      expect(skill.getBaseDir()).toBe(testDir);
+      expect(skill.getOutputRoot()).toBe(testDir);
     });
 
     it("should create instance with empty frontmatter for deletion", () => {

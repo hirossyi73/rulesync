@@ -7,8 +7,9 @@ import { IgnoreProcessor } from "../../features/ignore/ignore-processor.js";
 import { McpProcessor } from "../../features/mcp/mcp-processor.js";
 import { RulesProcessor } from "../../features/rules/rules-processor.js";
 import { SubagentsProcessor } from "../../features/subagents/subagents-processor.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
+import { ErrorCodes } from "../../types/json-output.js";
 import { fileExists } from "../../utils/file.js";
-import { logger } from "../../utils/logger.js";
 import type { GenerateOptions } from "./generate.js";
 import { generateCommand } from "./generate.js";
 
@@ -20,7 +21,6 @@ vi.mock("../../features/mcp/mcp-processor.js");
 vi.mock("../../features/subagents/subagents-processor.js");
 vi.mock("../../features/commands/commands-processor.js");
 vi.mock("../../utils/file.js");
-vi.mock("../../utils/logger.js");
 vi.mock("es-toolkit", () => ({
   intersection: vi.fn(),
 }));
@@ -29,6 +29,7 @@ describe("generateCommand", () => {
   let mockExit: any;
   let mockConfig: any;
   let mockProcessorInstance: any;
+  let mockLogger: ReturnType<typeof createMockLogger>;
 
   beforeEach(() => {
     // Mock process.cwd to return a consistent value
@@ -43,9 +44,11 @@ describe("generateCommand", () => {
     mockConfig = {
       getVerbose: vi.fn().mockReturnValue(false),
       getSilent: vi.fn().mockReturnValue(false),
-      getBaseDirs: vi.fn().mockReturnValue(["."]),
+      getOutputRoots: vi.fn().mockReturnValue(["."]),
       getTargets: vi.fn().mockReturnValue(["claudecode"]),
+      getConfigFileTargets: vi.fn().mockReturnValue(["claudecode"]),
       getFeatures: vi.fn().mockReturnValue(["rules", "ignore", "mcp", "commands", "subagents"]),
+      getFeatureOptions: vi.fn().mockReturnValue(undefined),
       getDelete: vi.fn().mockReturnValue(false),
       getGlobal: vi.fn().mockReturnValue(false),
       getSimulateCommands: vi.fn().mockReturnValue(false),
@@ -54,18 +57,13 @@ describe("generateCommand", () => {
       getDryRun: vi.fn().mockReturnValue(false),
       getCheck: vi.fn().mockReturnValue(false),
       isPreviewMode: vi.fn().mockReturnValue(false),
+      getInputRoot: vi.fn().mockReturnValue(process.cwd()),
     };
 
     vi.mocked(ConfigResolver.resolve).mockResolvedValue(mockConfig);
     vi.mocked(fileExists).mockResolvedValue(true);
 
-    // Setup logger mocks
-    vi.mocked(logger.configure).mockImplementation(() => {});
-    vi.mocked(logger.info).mockImplementation(() => {});
-    vi.mocked(logger.debug).mockImplementation(() => {});
-    vi.mocked(logger.error).mockImplementation(() => {});
-    vi.mocked(logger.success).mockImplementation(() => {});
-    vi.mocked(logger.warn).mockImplementation(() => {});
+    mockLogger = createMockLogger();
 
     // Setup intersection mock to return the first array by default
     vi.mocked(intersection).mockImplementation((a, b) => a.filter((item) => b.includes(item)));
@@ -139,52 +137,40 @@ describe("generateCommand", () => {
   });
 
   describe("initial setup", () => {
-    it("should resolve config and configure logger", async () => {
+    it("should resolve config", async () => {
       const options: GenerateOptions = { verbose: true };
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(ConfigResolver.resolve).toHaveBeenCalledWith(options);
-      expect(logger.configure).toHaveBeenCalledWith({ verbose: false, silent: false });
-    });
-
-    it("should configure verbose logging when config has verbose enabled", async () => {
-      mockConfig.getVerbose.mockReturnValue(true);
-      const options: GenerateOptions = {};
-
-      await generateCommand(options);
-
-      expect(logger.configure).toHaveBeenCalledWith({ verbose: true, silent: false });
+      expect(ConfigResolver.resolve).toHaveBeenCalledWith(options, { logger: mockLogger });
     });
 
     it("should log generating files message", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating files...");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating files...");
     });
   });
 
   describe("rulesync directory check", () => {
-    it("should exit with error when .rulesync directory does not exist", async () => {
+    it("should throw error when .rulesync directory does not exist", async () => {
       vi.mocked(fileExists).mockResolvedValue(false);
       const options: GenerateOptions = {};
 
-      await expect(generateCommand(options)).rejects.toThrow("Process exit");
+      await expect(generateCommand(mockLogger, options)).rejects.toThrow(
+        ".rulesync directory not found",
+      );
 
       expect(fileExists).toHaveBeenCalledWith("/test/project/.rulesync");
-      expect(logger.error).toHaveBeenCalledWith(
-        "❌ .rulesync directory not found. Run 'rulesync init' first.",
-      );
-      expect(mockExit).toHaveBeenCalledWith(1);
     });
 
     it("should continue when .rulesync directory exists", async () => {
       vi.mocked(fileExists).mockResolvedValue(true);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(fileExists).toHaveBeenCalledWith("/test/project/.rulesync");
       expect(mockExit).not.toHaveBeenCalled();
@@ -199,19 +185,21 @@ describe("generateCommand", () => {
     it("should generate rule files when rules feature is enabled", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating rule files...");
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        global: false,
-        toolTarget: "claudecode",
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating rule files...");
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          global: false,
+          toolTarget: "claudecode",
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
     });
 
     it("should pass simulation options to RulesProcessor", async () => {
@@ -219,18 +207,20 @@ describe("generateCommand", () => {
       mockConfig.getSimulateSubagents.mockReturnValue(true);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        global: false,
-        toolTarget: "claudecode",
-        simulateCommands: true,
-        simulateSubagents: true,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          global: false,
+          toolTarget: "claudecode",
+          simulateCommands: true,
+          simulateSubagents: true,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
     });
 
     it("should remove old files when delete option is enabled", async () => {
@@ -251,45 +241,49 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(customMockInstance.loadToolFiles).toHaveBeenCalledWith({ forDeletion: true });
       expect(customMockInstance.removeOrphanAiFiles).toHaveBeenCalled();
     });
 
     it("should process multiple base directories", async () => {
-      mockConfig.getBaseDirs.mockReturnValue(["dir1", "dir2"]);
+      mockConfig.getOutputRoots.mockReturnValue(["dir1", "dir2"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: "dir1",
-        global: false,
-        toolTarget: "claudecode",
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: "dir2",
-        global: false,
-        toolTarget: "claudecode",
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "dir1",
+          global: false,
+          toolTarget: "claudecode",
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "dir2",
+          global: false,
+          toolTarget: "claudecode",
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
     });
 
     it("should skip rules when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(RulesProcessor).not.toHaveBeenCalled();
     });
@@ -303,15 +297,17 @@ describe("generateCommand", () => {
     it("should generate MCP files when mcp feature is enabled", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating MCP files...");
-      expect(McpProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating MCP files...");
+      expect(McpProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should only process supported MCP targets", async () => {
@@ -319,7 +315,7 @@ describe("generateCommand", () => {
       vi.mocked(intersection).mockReturnValue(["claudecode", "cursor"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(intersection).toHaveBeenCalledWith(
         ["claudecode", "cursor", "unsupported"],
@@ -345,7 +341,7 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(customMockInstance.loadToolFiles).toHaveBeenCalledWith({ forDeletion: true });
       expect(customMockInstance.removeOrphanAiFiles).toHaveBeenCalled();
@@ -355,7 +351,7 @@ describe("generateCommand", () => {
       mockConfig.getFeatures.mockReturnValue([]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(McpProcessor).not.toHaveBeenCalled();
     });
@@ -369,22 +365,24 @@ describe("generateCommand", () => {
     it("should generate command files when commands feature is enabled", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating command files...");
-      expect(CommandsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating command files...");
+      expect(CommandsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should pass includeSimulated flag to getToolTargets", async () => {
       mockConfig.getSimulateCommands.mockReturnValue(true);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(CommandsProcessor.getToolTargets).toHaveBeenCalledWith({
         global: false,
@@ -396,7 +394,7 @@ describe("generateCommand", () => {
       mockConfig.getFeatures.mockReturnValue([]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(CommandsProcessor).not.toHaveBeenCalled();
     });
@@ -405,34 +403,42 @@ describe("generateCommand", () => {
   describe("ignore feature", () => {
     beforeEach(() => {
       mockConfig.getFeatures.mockReturnValue(["ignore"]);
-      mockConfig.getBaseDirs.mockReturnValue(["."]);
+      mockConfig.getOutputRoots.mockReturnValue(["."]);
     });
 
     it("should generate ignore files when ignore feature is enabled", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating ignore files...");
-      expect(IgnoreProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        dryRun: false,
-      });
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating ignore files...");
+      expect(IgnoreProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          dryRun: false,
+        }),
+      );
     });
 
-    it("should handle current working directory correctly", async () => {
+    it("should pass outputRoot verbatim even when it equals current working directory", async () => {
+      // The legacy `outputRoot === process.cwd() ? "." : outputRoot` heuristic was
+      // removed to keep ignore processing consistent with every other
+      // feature processor — IgnoreProcessor now receives the same absolute
+      // path the other processors receive.
       const mockCwd = vi.spyOn(process, "cwd").mockReturnValue("/current/working/dir");
-      mockConfig.getBaseDirs.mockReturnValue(["/current/working/dir"]);
+      mockConfig.getOutputRoots.mockReturnValue(["/current/working/dir"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(IgnoreProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        dryRun: false,
-      });
+      expect(IgnoreProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/current/working/dir",
+          toolTarget: "claudecode",
+          dryRun: false,
+        }),
+      );
 
       mockCwd.mockRestore();
     });
@@ -444,17 +450,17 @@ describe("generateCommand", () => {
       const options: GenerateOptions = {};
 
       // Should not throw, errors are caught and processing continues
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       // Should still complete without error
-      expect(logger.info).toHaveBeenCalledWith("✓ All files are up to date (ignore)");
+      expect(mockLogger.info).toHaveBeenCalledWith("✓ All files are up to date (ignore)");
     });
 
     it("should skip ignore files when no rulesync files found", async () => {
       mockProcessorInstance.loadRulesyncFiles.mockResolvedValue([]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(mockProcessorInstance.convertRulesyncFilesToToolFiles).not.toHaveBeenCalled();
       expect(mockProcessorInstance.writeAiFiles).not.toHaveBeenCalled();
@@ -469,22 +475,24 @@ describe("generateCommand", () => {
     it("should generate subagent files when subagents feature is enabled", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating subagent files...");
-      expect(SubagentsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating subagent files...");
+      expect(SubagentsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should pass includeSimulated flag to getToolTargets", async () => {
       mockConfig.getSimulateSubagents.mockReturnValue(true);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(SubagentsProcessor.getToolTargets).toHaveBeenCalledWith({
         global: false,
@@ -501,7 +509,7 @@ describe("generateCommand", () => {
         vi.mocked(SubagentsProcessor.getToolTargets).mockReturnValue(["claudecode"]);
         const options: GenerateOptions = {};
 
-        await generateCommand(options);
+        await generateCommand(mockLogger, options);
 
         expect(SubagentsProcessor.getToolTargets).toHaveBeenCalledWith(
           expect.objectContaining({ global: true }),
@@ -512,14 +520,16 @@ describe("generateCommand", () => {
         vi.mocked(SubagentsProcessor.getToolTargets).mockReturnValue(["claudecode"]);
         const options: GenerateOptions = {};
 
-        await generateCommand(options);
+        await generateCommand(mockLogger, options);
 
-        expect(SubagentsProcessor).toHaveBeenCalledWith({
-          baseDir: ".",
-          toolTarget: "claudecode",
-          global: true,
-          dryRun: false,
-        });
+        expect(SubagentsProcessor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outputRoot: ".",
+            toolTarget: "claudecode",
+            global: true,
+            dryRun: false,
+          }),
+        );
       });
 
       it("should only process claudecode target in global mode", async () => {
@@ -528,18 +538,20 @@ describe("generateCommand", () => {
         vi.mocked(intersection).mockReturnValue(["claudecode"]);
         const options: GenerateOptions = {};
 
-        await generateCommand(options);
+        await generateCommand(mockLogger, options);
 
         expect(intersection).toHaveBeenCalledWith(
           ["claudecode", "copilot", "cursor"],
           ["claudecode"],
         );
-        expect(SubagentsProcessor).toHaveBeenCalledWith({
-          baseDir: ".",
-          toolTarget: "claudecode",
-          global: true,
-          dryRun: false,
-        });
+        expect(SubagentsProcessor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outputRoot: ".",
+            toolTarget: "claudecode",
+            global: true,
+            dryRun: false,
+          }),
+        );
       });
 
       it("should not process simulated targets in global mode even if simulateSubagents is true", async () => {
@@ -549,19 +561,21 @@ describe("generateCommand", () => {
         vi.mocked(intersection).mockReturnValue(["claudecode"]);
         const options: GenerateOptions = {};
 
-        await generateCommand(options);
+        await generateCommand(mockLogger, options);
 
         // Should use getToolTargets with global: true instead of includeSimulated
         expect(SubagentsProcessor.getToolTargets).toHaveBeenCalledWith(
           expect.objectContaining({ global: true }),
         );
         expect(SubagentsProcessor).toHaveBeenCalledTimes(1);
-        expect(SubagentsProcessor).toHaveBeenCalledWith({
-          baseDir: ".",
-          toolTarget: "claudecode",
-          global: true,
-          dryRun: false,
-        });
+        expect(SubagentsProcessor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outputRoot: ".",
+            toolTarget: "claudecode",
+            global: true,
+            dryRun: false,
+          }),
+        );
       });
     });
   });
@@ -583,9 +597,9 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.info).toHaveBeenCalledWith("✓ All files are up to date (rules)");
+      expect(mockLogger.info).toHaveBeenCalledWith("✓ All files are up to date (rules)");
     });
 
     it("should show success message with correct totals", async () => {
@@ -626,9 +640,9 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.success).toHaveBeenCalledWith(
+      expect(mockLogger.success).toHaveBeenCalledWith(
         "🎉 All done! Written 6 file(s) total (2 rules + 3 MCP files + 1 commands)",
       );
     });
@@ -641,20 +655,20 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.success).toHaveBeenCalledWith(
+      expect(mockLogger.success).toHaveBeenCalledWith(
         "🎉 All done! Written 5 file(s) total (1 rules + 1 ignore files + 1 MCP files + 1 commands + 1 subagents)",
       );
     });
 
-    it("should log base directories", async () => {
-      mockConfig.getBaseDirs.mockReturnValue(["dir1", "dir2"]);
+    it("should log output roots", async () => {
+      mockConfig.getOutputRoots.mockReturnValue(["dir1", "dir2"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Base directories: dir1, dir2");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Output roots: dir1, dir2");
     });
 
     it("should log success for each processor type", async () => {
@@ -674,9 +688,76 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.success).toHaveBeenCalledWith("Written 3 rule(s)");
+      expect(mockLogger.success).toHaveBeenCalledWith("Written 3 rules");
+    });
+  });
+
+  describe("check mode", () => {
+    it("should fail when check mode would delete orphan files", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getCheck.mockReturnValue(true);
+      mockConfig.getDelete.mockReturnValue(true);
+      mockConfig.isPreviewMode.mockReturnValue(true);
+
+      const rulesMock = {
+        loadToolFiles: vi.fn().mockResolvedValue([
+          {
+            getFilePath: () => "/path/to/orphan",
+          },
+        ]),
+        removeOrphanAiFiles: vi.fn().mockResolvedValue(1),
+        loadRulesyncFiles: vi.fn().mockResolvedValue([
+          {
+            getFilePath: () => "/path/to/rulesync",
+          },
+        ]),
+        convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([
+          {
+            getFilePath: () => "/path/to/converted",
+          },
+        ]),
+        writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+      };
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return rulesMock as any;
+      });
+
+      await expect(generateCommand(mockLogger, {})).rejects.toThrow(
+        "Files are not up to date. Run 'rulesync generate' to update.",
+      );
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith("✓ All files are up to date (rules)");
+    });
+
+    it("should succeed when check mode finds no diff", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getCheck.mockReturnValue(true);
+      mockConfig.isPreviewMode.mockReturnValue(true);
+
+      const rulesMock = {
+        loadToolFiles: vi.fn().mockResolvedValue([]),
+        removeOrphanAiFiles: vi.fn().mockResolvedValue(0),
+        loadRulesyncFiles: vi.fn().mockResolvedValue([
+          {
+            getFilePath: () => "/path/to/rulesync",
+          },
+        ]),
+        convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([
+          {
+            getFilePath: () => "/path/to/converted",
+          },
+        ]),
+        writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+      };
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return rulesMock as any;
+      });
+
+      await generateCommand(mockLogger, {});
+
+      expect(mockLogger.success).toHaveBeenCalledWith("✓ All files are up to date.");
     });
   });
 
@@ -685,14 +766,14 @@ describe("generateCommand", () => {
       vi.mocked(ConfigResolver.resolve).mockRejectedValue(new Error("Config error"));
       const options: GenerateOptions = {};
 
-      await expect(generateCommand(options)).rejects.toThrow("Config error");
+      await expect(generateCommand(mockLogger, options)).rejects.toThrow("Config error");
     });
 
     it("should handle file existence check errors", async () => {
       vi.mocked(fileExists).mockRejectedValue(new Error("File system error"));
       const options: GenerateOptions = {};
 
-      await expect(generateCommand(options)).rejects.toThrow("File system error");
+      await expect(generateCommand(mockLogger, options)).rejects.toThrow("File system error");
     });
 
     it("should handle processor instantiation errors", async () => {
@@ -702,7 +783,7 @@ describe("generateCommand", () => {
       });
       const options: GenerateOptions = {};
 
-      await expect(generateCommand(options)).rejects.toThrow("Processor error");
+      await expect(generateCommand(mockLogger, options)).rejects.toThrow("Processor error");
     });
   });
 
@@ -712,16 +793,16 @@ describe("generateCommand", () => {
       mockConfig.getFeatures.mockReturnValue(["rules", "mcp", "commands", "ignore", "subagents"]);
     });
 
-    it("should check .rulesync directory from process.cwd() not from baseDirs in global mode", async () => {
-      mockConfig.getBaseDirs.mockReturnValue(["/home/user"]);
+    it("should check .rulesync directory from process.cwd() not from outputRoots in global mode", async () => {
+      mockConfig.getOutputRoots.mockReturnValue(["/home/user"]);
       mockConfig.getFeatures.mockReturnValue(["rules"]);
       vi.mocked(RulesProcessor.getToolTargets).mockReturnValue(["claudecode"]);
       vi.mocked(intersection).mockReturnValue(["claudecode"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      // Should check .rulesync in process.cwd(), not in baseDirs[0] (which is /home/user in global mode)
+      // Should check .rulesync in process.cwd(), not in outputRoots[0] (which is /home/user in global mode)
       expect(fileExists).toHaveBeenCalledWith("/test/project/.rulesync");
     });
 
@@ -731,7 +812,7 @@ describe("generateCommand", () => {
       vi.mocked(intersection).mockReturnValue(["claudecode"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(RulesProcessor.getToolTargets).toHaveBeenCalledWith({ global: true });
     });
@@ -744,18 +825,20 @@ describe("generateCommand", () => {
       vi.mocked(intersection).mockReturnValue(["claudecode"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: true,
-        simulateCommands: true,
-        simulateSubagents: true,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: true,
+          simulateCommands: true,
+          simulateSubagents: true,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
     });
 
     it("should process delete option in global mode", async () => {
@@ -778,52 +861,58 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(customMockInstance.loadToolFiles).toHaveBeenCalledWith({ forDeletion: true });
       expect(customMockInstance.removeOrphanAiFiles).toHaveBeenCalled();
     });
 
-    it("should use each baseDir in global mode", async () => {
+    it("should use each outputRoot in global mode", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
-      mockConfig.getBaseDirs.mockReturnValue(["dir1", "dir2", "dir3"]);
+      mockConfig.getOutputRoots.mockReturnValue(["dir1", "dir2", "dir3"]);
       vi.mocked(RulesProcessor.getToolTargets).mockReturnValue(["claudecode", "codexcli"]);
       vi.mocked(intersection).mockReturnValue(["claudecode"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: "dir1",
-        toolTarget: "claudecode",
-        global: true,
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: "dir2",
-        toolTarget: "claudecode",
-        global: true,
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: "dir3",
-        toolTarget: "claudecode",
-        global: true,
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
-      expect(RulesProcessor).toHaveBeenCalledTimes(3); // Once for each baseDir
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "dir1",
+          toolTarget: "claudecode",
+          global: true,
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "dir2",
+          toolTarget: "claudecode",
+          global: true,
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "dir3",
+          toolTarget: "claudecode",
+          global: true,
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
+      expect(RulesProcessor).toHaveBeenCalledTimes(3); // Once for each outputRoot
     });
 
     it("should skip MCP generation in global mode when no targets match", async () => {
@@ -831,9 +920,9 @@ describe("generateCommand", () => {
       vi.mocked(McpProcessor.getToolTargets).mockReturnValue(["codexcli"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.debug).toHaveBeenCalledWith("Generating MCP files...");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Generating MCP files...");
       // McpProcessor should not be called because intersection of targets is empty
       expect(McpProcessor).not.toHaveBeenCalled();
     });
@@ -841,14 +930,16 @@ describe("generateCommand", () => {
     it("should generate commands in global mode for supported tools", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(CommandsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: true,
-        dryRun: false,
-      });
+      expect(CommandsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: true,
+          dryRun: false,
+        }),
+      );
       expect(CommandsProcessor.getToolTargets).toHaveBeenCalledWith(
         expect.objectContaining({ global: true }),
       );
@@ -857,7 +948,7 @@ describe("generateCommand", () => {
     it("should skip ignore generation in global mode", async () => {
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(IgnoreProcessor).not.toHaveBeenCalled();
     });
@@ -869,14 +960,16 @@ describe("generateCommand", () => {
       vi.mocked(intersection).mockReturnValue(["claudecode"]);
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(SubagentsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: true,
-        dryRun: false,
-      });
+      expect(SubagentsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: true,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should show success message with only rules count in global mode", async () => {
@@ -898,9 +991,11 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.success).toHaveBeenCalledWith("🎉 All done! Written 5 file(s) total (5 rules)");
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "🎉 All done! Written 5 file(s) total (5 rules)",
+      );
     });
 
     it("should only process rules, commands, mcp, and subagents when global mode is enabled with multiple features", async () => {
@@ -956,15 +1051,142 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       expect(RulesProcessor).toHaveBeenCalledTimes(2); // Once for claudecode, once for codexcli
       expect(CommandsProcessor).toHaveBeenCalledTimes(1); // Once for claudecode
       expect(McpProcessor).toHaveBeenCalledTimes(1); // Once for codexcli in global mode
       expect(SubagentsProcessor).toHaveBeenCalledTimes(1); // Once for claudecode
       expect(IgnoreProcessor).not.toHaveBeenCalled();
-      expect(logger.success).toHaveBeenCalledWith(
+      expect(mockLogger.success).toHaveBeenCalledWith(
         "🎉 All done! Written 15 file(s) total (6 rules + 3 MCP files + 3 commands + 3 subagents)",
+      );
+    });
+  });
+
+  describe("inputRoot decoupling", () => {
+    // Rules source dir (where .rulesync/ lives) is independent of output outputRoots.
+    const inputRoot = "/central/rulesync-source";
+    const outputRoots = ["/project/app-one", "/project/app-two"];
+
+    beforeEach(() => {
+      mockConfig.getInputRoot.mockReturnValue(inputRoot);
+      mockConfig.getOutputRoots.mockReturnValue(outputRoots);
+    });
+
+    it("should check for .rulesync under inputRoot, not under outputRoots", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(fileExists).toHaveBeenCalledWith("/central/rulesync-source/.rulesync");
+      expect(fileExists).not.toHaveBeenCalledWith("/project/app-one/.rulesync");
+      expect(fileExists).not.toHaveBeenCalledWith("/project/app-two/.rulesync");
+    });
+
+    it("should construct RulesProcessor with inputRoot distinct from outputRoot for each output dir", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(RulesProcessor).toHaveBeenCalledTimes(2);
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-one",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-two",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+    });
+
+    it("should pass inputRoot to IgnoreProcessor independently of outputRoot", async () => {
+      mockConfig.getFeatures.mockReturnValue(["ignore"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(IgnoreProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-one",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+      expect(IgnoreProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-two",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+    });
+
+    it("should pass inputRoot to McpProcessor independently of outputRoot", async () => {
+      mockConfig.getFeatures.mockReturnValue(["mcp"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(McpProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-one",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+      expect(McpProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-two",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+    });
+
+    it("should pass inputRoot to CommandsProcessor independently of outputRoot", async () => {
+      mockConfig.getFeatures.mockReturnValue(["commands"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(CommandsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-one",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+      expect(CommandsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-two",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+    });
+
+    it("should pass inputRoot to SubagentsProcessor independently of outputRoot", async () => {
+      mockConfig.getFeatures.mockReturnValue(["subagents"]);
+
+      await generateCommand(mockLogger, {});
+
+      expect(SubagentsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-one",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
+      );
+      expect(SubagentsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: "/project/app-two",
+          inputRoot,
+          toolTarget: "claudecode",
+        }),
       );
     });
   });
@@ -992,28 +1214,119 @@ describe("generateCommand", () => {
 
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
-      expect(logger.success).toHaveBeenCalledWith("Written 2 rule(s)");
-      expect(logger.success).toHaveBeenCalledWith("🎉 All done! Written 2 file(s) total (2 rules)");
+      expect(mockLogger.success).toHaveBeenCalledWith("Written 2 rules");
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "🎉 All done! Written 2 file(s) total (2 rules)",
+      );
+    });
+
+    it("should fail in check mode when only orphan deletions occur (no new files)", async () => {
+      // Regression test: previously, generateCommand returned early when
+      // totalGenerated === 0, which skipped the --check mode hasDiff handling.
+      // This caused check mode to silently succeed when the only diff was an
+      // orphan file that would be deleted.
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getCheck.mockReturnValue(true);
+      mockConfig.getDelete.mockReturnValue(true);
+
+      // Shape of the orphan entry is irrelevant — only the count returned by
+      // removeOrphanAiFiles drives the hasDiff branch under test.
+      const removeOrphanMock = vi.fn().mockResolvedValue(1);
+      const loadToolFilesMock = vi.fn().mockResolvedValue([{ orphan: "file" }]);
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return {
+          loadToolFiles: loadToolFilesMock,
+          removeOrphanAiFiles: removeOrphanMock,
+          loadRulesyncFiles: vi.fn().mockResolvedValue([{ file: "test" }]),
+          convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([{ tool: "converted" }]),
+          writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+        } as any;
+      });
+
+      const options: GenerateOptions = {};
+
+      await expect(generateCommand(mockLogger, options)).rejects.toMatchObject({
+        code: ErrorCodes.GENERATION_FAILED,
+        message: "Files are not up to date. Run 'rulesync generate' to update.",
+      });
+
+      // Guard the actual code path: orphan detection must have run before the
+      // check-mode hasDiff branch throws.
+      expect(loadToolFilesMock).toHaveBeenCalled();
+      expect(removeOrphanMock).toHaveBeenCalled();
+    });
+
+    it("should succeed in check mode when no diff exists and delete is enabled", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getCheck.mockReturnValue(true);
+      mockConfig.getDelete.mockReturnValue(true);
+
+      const removeOrphanMock = vi.fn().mockResolvedValue(0);
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return {
+          loadToolFiles: vi.fn().mockResolvedValue([]),
+          removeOrphanAiFiles: removeOrphanMock,
+          loadRulesyncFiles: vi.fn().mockResolvedValue([{ file: "test" }]),
+          convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([{ tool: "converted" }]),
+          writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+        } as any;
+      });
+
+      const options: GenerateOptions = {};
+
+      await generateCommand(mockLogger, options);
+
+      // Orphan scan must run when delete is enabled, and report no diff.
+      expect(removeOrphanMock).toHaveBeenCalled();
+      expect(mockLogger.success).toHaveBeenCalledWith("✓ All files are up to date.");
+    });
+
+    it("should succeed in check mode when no diff exists and delete is disabled", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getCheck.mockReturnValue(true);
+      mockConfig.getDelete.mockReturnValue(false);
+
+      const removeOrphanMock = vi.fn().mockResolvedValue(0);
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return {
+          loadToolFiles: vi.fn().mockResolvedValue([]),
+          removeOrphanAiFiles: removeOrphanMock,
+          loadRulesyncFiles: vi.fn().mockResolvedValue([{ file: "test" }]),
+          convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([{ tool: "converted" }]),
+          writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+        } as any;
+      });
+
+      const options: GenerateOptions = {};
+
+      await generateCommand(mockLogger, options);
+
+      // When delete is disabled, orphan removal must NOT run; the success log
+      // still fires from the no-diff branch.
+      expect(removeOrphanMock).not.toHaveBeenCalled();
+      expect(mockLogger.success).toHaveBeenCalledWith("✓ All files are up to date.");
     });
 
     it("should handle multiple targets and base directories", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
-      mockConfig.getBaseDirs.mockReturnValue(["dir1", "dir2"]);
+      mockConfig.getOutputRoots.mockReturnValue(["dir1", "dir2"]);
       mockConfig.getTargets.mockReturnValue(["claudecode", "cursor"]);
       vi.mocked(intersection).mockReturnValue(["claudecode", "cursor"]);
 
       mockProcessorInstance.writeAiFiles.mockResolvedValue({ count: 1, paths: [] });
       const options: GenerateOptions = {};
 
-      await generateCommand(options);
+      await generateCommand(mockLogger, options);
 
       // Should create processors for each combination of base dir and target
       expect(RulesProcessor).toHaveBeenCalledTimes(4); // 2 dirs × 2 targets
       // Total count is 4 (1 per processor)
-      expect(logger.success).toHaveBeenCalledWith("Written 4 rule(s)");
-      expect(logger.success).toHaveBeenCalledWith("🎉 All done! Written 4 file(s) total (4 rules)");
+      expect(mockLogger.success).toHaveBeenCalledWith("Written 4 rules");
+      expect(mockLogger.success).toHaveBeenCalledWith(
+        "🎉 All done! Written 4 file(s) total (4 rules)",
+      );
     });
   });
 });

@@ -7,14 +7,13 @@ import type { GitProvider } from "./git-provider.js";
 /**
  * Conflict resolution strategies for fetch command
  */
-export const ConflictStrategySchema = z.enum(["skip", "overwrite"]);
+const ConflictStrategySchema = z.enum(["skip", "overwrite"]);
 export type ConflictStrategy = z.infer<typeof ConflictStrategySchema>;
 
 /**
  * GitHub file type from API response
  */
-export const GitHubFileTypeSchema = z.enum(["file", "dir", "symlink", "submodule"]);
-export type GitHubFileType = z.infer<typeof GitHubFileTypeSchema>;
+const GitHubFileTypeSchema = z.enum(["file", "dir", "symlink", "submodule"]);
 
 /**
  * GitHub file/directory entry from contents API
@@ -43,7 +42,7 @@ export type ParsedSource = {
 /**
  * Fetch command options
  */
-export const FetchOptionsSchema = z.looseObject({
+const FetchOptionsSchema = z.looseObject({
   target: z.optional(FetchTargetSchema),
   features: z.optional(z.array(z.enum(ALL_FEATURES_WITH_WILDCARD))),
   ref: z.optional(z.string()),
@@ -59,8 +58,8 @@ export type FetchOptions = z.infer<typeof FetchOptionsSchema>;
 /**
  * Result status for a single file fetch operation
  */
-export const FetchFileStatusSchema = z.enum(["created", "overwritten", "skipped"]);
-export type FetchFileStatus = z.infer<typeof FetchFileStatusSchema>;
+const FetchFileStatusSchema = z.enum(["created", "overwritten", "skipped"]);
+type FetchFileStatus = z.infer<typeof FetchFileStatusSchema>;
 
 /**
  * Result of a single file fetch operation
@@ -110,7 +109,7 @@ export type GitHubRepoInfo = z.infer<typeof GitHubRepoInfoSchema>;
 /**
  * GitHub release asset from releases API
  */
-export const GitHubReleaseAssetSchema = z.looseObject({
+const GitHubReleaseAssetSchema = z.looseObject({
   name: z.string(),
   browser_download_url: z.string(),
   size: z.number(),

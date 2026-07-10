@@ -3,11 +3,13 @@ import { join } from "node:path";
 import { intersection } from "es-toolkit";
 
 import { Config } from "../config/config.js";
+import { AGENTSMD_RULE_FILE_NAME } from "../constants/agentsmd-paths.js";
 import { RULESYNC_RELATIVE_DIR_PATH } from "../constants/rulesync-paths.js";
 import { CommandsProcessor } from "../features/commands/commands-processor.js";
 import { HooksProcessor } from "../features/hooks/hooks-processor.js";
 import { IgnoreProcessor } from "../features/ignore/ignore-processor.js";
 import { McpProcessor } from "../features/mcp/mcp-processor.js";
+import { PermissionsProcessor } from "../features/permissions/permissions-processor.js";
 import { RulesProcessor } from "../features/rules/rules-processor.js";
 import { RulesyncSkill } from "../features/skills/rulesync-skill.js";
 import { SkillsProcessor } from "../features/skills/skills-processor.js";
@@ -17,11 +19,13 @@ import { AiFile } from "../types/ai-file.js";
 import { DirFeatureProcessor } from "../types/dir-feature-processor.js";
 import { FeatureProcessor } from "../types/feature-processor.js";
 import type { Feature } from "../types/features.js";
+import type { RulesyncFile } from "../types/rulesync-file.js";
 import type { ToolTarget } from "../types/tool-targets.js";
 import { formatError } from "../utils/error.js";
-import { fileExists } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
+import { fileExists, toPosixPath } from "../utils/file.js";
+import type { Logger } from "../utils/logger.js";
 import type { FeatureGenerateResult } from "../utils/result.js";
+import { deriveSharedWriteSteps } from "./shared-file-derive.js";
 
 export type GenerateResult = {
   rulesCount: number;
@@ -38,6 +42,8 @@ export type GenerateResult = {
   skillsPaths: string[];
   hooksCount: number;
   hooksPaths: string[];
+  permissionsCount: number;
+  permissionsPaths: string[];
   skills: RulesyncSkill[];
   hasDiff: boolean;
 };
@@ -46,20 +52,27 @@ async function processFeatureGeneration<T extends AiFile>(params: {
   config: Config;
   processor: FeatureProcessor;
   toolFiles: T[];
+  skipFilePaths?: Set<string>;
 }): Promise<FeatureGenerateResult> {
-  const { config, processor, toolFiles } = params;
+  const { config, processor, toolFiles, skipFilePaths } = params;
+
+  const filesToCheck =
+    skipFilePaths && skipFilePaths.size > 0
+      ? toolFiles.filter((f) => !skipFilePaths.has(f.getRelativePathFromCwd()))
+      : toolFiles;
 
   let totalCount = 0;
   const allPaths: string[] = [];
   let hasDiff = false;
 
-  const writeResult = await processor.writeAiFiles(toolFiles);
+  const writeResult = await processor.writeAiFiles(filesToCheck);
   totalCount += writeResult.count;
   allPaths.push(...writeResult.paths);
   if (writeResult.count > 0) hasDiff = true;
 
   if (config.getDelete()) {
     const existingToolFiles = await processor.loadToolFiles({ forDeletion: true });
+
     const orphanCount = await processor.removeOrphanAiFiles(existingToolFiles, toolFiles);
     if (orphanCount > 0) hasDiff = true;
   }
@@ -85,6 +98,7 @@ async function processDirFeatureGeneration(params: {
 
   if (config.getDelete()) {
     const existingToolDirs = await processor.loadToolDirsToDelete();
+
     const orphanCount = await processor.removeOrphanAiDirs(existingToolDirs, toolDirs);
     if (orphanCount > 0) hasDiff = true;
   }
@@ -96,90 +110,369 @@ async function processDirFeatureGeneration(params: {
 async function processEmptyFeatureGeneration(params: {
   config: Config;
   processor: FeatureProcessor;
+  skipFilePaths?: Set<string>;
 }): Promise<FeatureGenerateResult> {
-  const { config, processor } = params;
+  const { config, processor, skipFilePaths } = params;
 
   const totalCount = 0;
   let hasDiff = false;
 
   if (config.getDelete()) {
     const existingToolFiles = await processor.loadToolFiles({ forDeletion: true });
-    const orphanCount = await processor.removeOrphanAiFiles(existingToolFiles, []);
+
+    const filesToDelete =
+      skipFilePaths && skipFilePaths.size > 0
+        ? existingToolFiles.filter((f) => !skipFilePaths.has(f.getRelativePathFromCwd()))
+        : existingToolFiles;
+
+    const orphanCount = await processor.removeOrphanAiFiles(filesToDelete, []);
     if (orphanCount > 0) hasDiff = true;
   }
 
   return { count: totalCount, paths: [], hasDiff };
 }
 
+/**
+ * Dispatch to processEmptyFeatureGeneration or processFeatureGeneration
+ * based on whether rulesync files exist.
+ */
+async function processFeatureWithRulesyncFiles(params: {
+  config: Config;
+  processor: FeatureProcessor;
+  rulesyncFiles: RulesyncFile[];
+  skipFilePaths?: Set<string>;
+}): Promise<FeatureGenerateResult> {
+  const { config, processor, rulesyncFiles, skipFilePaths } = params;
+  if (rulesyncFiles.length === 0) {
+    return processEmptyFeatureGeneration({ config, processor, skipFilePaths });
+  }
+  const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
+  return processFeatureGeneration({ config, processor, toolFiles, skipFilePaths });
+}
+
+const SIMULATE_OPTION_MAP: Partial<Record<Feature, string>> = {
+  commands: "--simulate-commands",
+  subagents: "--simulate-subagents",
+  skills: "--simulate-skills",
+};
+
 function warnUnsupportedTargets(params: {
   config: Config;
   supportedTargets: ToolTarget[];
+  simulatedTargets?: ToolTarget[];
   featureName: Feature;
+  logger: Logger;
 }): void {
-  const { config, supportedTargets, featureName } = params;
+  const { config, supportedTargets, simulatedTargets = [], featureName, logger } = params;
   for (const target of config.getTargets()) {
     if (!supportedTargets.includes(target) && config.getFeatures(target).includes(featureName)) {
-      logger.warn(`Target '${target}' does not support the feature '${featureName}'. Skipping.`);
+      const simulateOption = SIMULATE_OPTION_MAP[featureName];
+      if (simulateOption && simulatedTargets.includes(target)) {
+        logger.warn(
+          `Target '${target}' only supports simulated '${featureName}'. Use '${simulateOption}' to enable it. Skipping.`,
+        );
+      } else {
+        logger.warn(`Target '${target}' does not support the feature '${featureName}'. Skipping.`);
+      }
     }
   }
 }
 
 /**
  * Check if .rulesync directory exists.
+ *
+ * The `.rulesync/` directory lives under the *input* root (where source rules
+ * are read from), not under any individual output root, so callers always pass
+ * `config.getInputRoot()` here.
  */
-export async function checkRulesyncDirExists(params: { baseDir: string }): Promise<boolean> {
-  return fileExists(join(params.baseDir, RULESYNC_RELATIVE_DIR_PATH));
+export async function checkRulesyncDirExists(params: { inputRoot: string }): Promise<boolean> {
+  return fileExists(join(params.inputRoot, RULESYNC_RELATIVE_DIR_PATH));
 }
+
+type GenerationStepId =
+  | "ignore"
+  | "mcp"
+  | "commands"
+  | "subagents"
+  | "skills"
+  | "hooks"
+  | "permissions"
+  | "rules";
+
+type GenerationStep = {
+  id: GenerationStepId;
+  /** `dir/file` keys for on-disk files this step read-modify-writes and shares with other steps. */
+  writesSharedFile?: readonly string[];
+  /** Step ids that must run before this one (they write a shared file this step then reads). */
+  dependsOn?: readonly GenerationStepId[];
+  run: () => Promise<FeatureGenerateResult>;
+};
+
+function dependsOnReachable(
+  byId: Map<GenerationStepId, GenerationStep>,
+  from: GenerationStepId,
+  target: GenerationStepId,
+): boolean {
+  const seen = new Set<GenerationStepId>();
+  const stack = [from];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined || seen.has(current)) continue;
+    seen.add(current);
+    if (current === target) return true;
+    for (const dep of byId.get(current)?.dependsOn ?? []) {
+      stack.push(dep);
+    }
+  }
+  return false;
+}
+
+function assertSharedFilesOrdered(
+  steps: GenerationStep[],
+  byId: Map<GenerationStepId, GenerationStep>,
+): void {
+  const writersByFile = new Map<string, GenerationStepId[]>();
+  for (const step of steps) {
+    for (const file of step.writesSharedFile ?? []) {
+      writersByFile.set(file, [...(writersByFile.get(file) ?? []), step.id]);
+    }
+  }
+  for (const [file, writers] of writersByFile) {
+    for (let i = 0; i < writers.length; i++) {
+      for (let j = i + 1; j < writers.length; j++) {
+        const a = writers[i]!;
+        const b = writers[j]!;
+        if (!dependsOnReachable(byId, a, b) && !dependsOnReachable(byId, b, a)) {
+          throw new Error(
+            `Generation steps '${a}' and '${b}' both write the shared file '${file}' ` +
+              `but neither declares a 'dependsOn' the other. Add a 'dependsOn' so the ` +
+              `read-modify-write order is fixed; otherwise one step silently drops the ` +
+              `other's keys.`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Topologically sort generation steps and reject ordering hazards: a shared file
+ * with two writers not ordered by `dependsOn` (a silent data-loss trap), an
+ * unknown dependency, or a cycle. Reordering `steps` stays safe as a result.
+ *
+ * @throws Error if a shared file has unordered writers, a dependency is unknown,
+ *   or the dependency graph contains a cycle.
+ */
+export function resolveExecutionOrder(steps: GenerationStep[]): GenerationStep[] {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+
+  assertSharedFilesOrdered(steps, byId);
+
+  const unresolvedDeps = new Map<GenerationStepId, number>(steps.map((step) => [step.id, 0]));
+  const dependents = new Map<GenerationStepId, GenerationStepId[]>();
+  for (const step of steps) {
+    for (const dep of step.dependsOn ?? []) {
+      if (!byId.has(dep)) {
+        throw new Error(`Generation step '${step.id}' depends on unknown step '${dep}'.`);
+      }
+      unresolvedDeps.set(step.id, (unresolvedDeps.get(step.id) ?? 0) + 1);
+      dependents.set(dep, [...(dependents.get(dep) ?? []), step.id]);
+    }
+  }
+
+  const ready = steps
+    .filter((step) => (unresolvedDeps.get(step.id) ?? 0) === 0)
+    .map((step) => step.id);
+  const ordered: GenerationStep[] = [];
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    ordered.push(byId.get(id)!);
+    for (const dependent of dependents.get(id) ?? []) {
+      const next = (unresolvedDeps.get(dependent) ?? 0) - 1;
+      unresolvedDeps.set(dependent, next);
+      if (next === 0) ready.push(dependent);
+    }
+  }
+
+  if (ordered.length !== steps.length) {
+    throw new Error("Generation steps contain a cyclic 'dependsOn' dependency.");
+  }
+
+  return ordered;
+}
+
+type GenerationStepMeta = Readonly<Omit<GenerationStep, "run">>;
+
+const SHARED_WRITE_STEPS = deriveSharedWriteSteps();
+
+const sharedWriteMeta = (
+  id: GenerationStepId,
+): Pick<GenerationStepMeta, "writesSharedFile" | "dependsOn"> => {
+  const step = SHARED_WRITE_STEPS.get(id);
+  return step ? { writesSharedFile: step.writesSharedFile, dependsOn: step.dependsOn } : {};
+};
+
+/**
+ * The static shape of the generation step graph: which steps write which shared
+ * (read-modify-write) config files, and the `dependsOn` edges that fix a safe order
+ * for those writers. Both are derived from the processor registry's settable
+ * paths and `SHARED_WRITE_FEATURE_ORDER` (see `shared-file-derive.ts`), so a new
+ * tool or shared path never requires editing this graph. Exported (separately
+ * from the `run` closures, which need a live `config`/`logger`) so
+ * `resolveExecutionOrder`'s ordering guarantee can be tested directly against
+ * the real graph rather than a hand-copied one. Readonly so a consumer can't
+ * mutate this module-level singleton and affect every subsequent `generate()`
+ * call in the process.
+ */
+export const GENERATION_STEP_GRAPH: readonly GenerationStepMeta[] = [
+  { id: "ignore", ...sharedWriteMeta("ignore") },
+  { id: "mcp", ...sharedWriteMeta("mcp") },
+  { id: "commands" },
+  { id: "subagents", ...sharedWriteMeta("subagents") },
+  { id: "skills" },
+  { id: "hooks", ...sharedWriteMeta("hooks") },
+  { id: "permissions", ...sharedWriteMeta("permissions") },
+  {
+    id: "rules",
+    ...sharedWriteMeta("rules"),
+    // On top of the derived shared-file edges, rules reads the skills list the
+    // skills step produces (a value dependency, not a shared-file one).
+    dependsOn: [...(sharedWriteMeta("rules").dependsOn ?? []), "skills"],
+  },
+];
 
 /**
  * Generate configuration files for AI tools.
  * @throws Error if generation fails
  */
-export async function generate(params: { config: Config }): Promise<GenerateResult> {
-  const { config } = params;
+export async function generate(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<GenerateResult> {
+  const { config, logger } = params;
 
-  const ignoreResult = await generateIgnoreCore({ config });
-  const mcpResult = await generateMcpCore({ config });
-  const commandsResult = await generateCommandsCore({ config });
-  const subagentsResult = await generateSubagentsCore({ config });
-  const skillsResult = await generateSkillsCore({ config });
-  const hooksResult = await generateHooksCore({ config });
-  const rulesResult = await generateRulesCore({ config, skills: skillsResult.skills });
+  // Captured by the skills step so the rules step can read the generated skills.
+  let skillsResult: Awaited<ReturnType<typeof generateSkillsCore>> | undefined;
 
-  const hasDiff =
-    ignoreResult.hasDiff ||
-    mcpResult.hasDiff ||
-    commandsResult.hasDiff ||
-    subagentsResult.hasDiff ||
-    skillsResult.hasDiff ||
-    hooksResult.hasDiff ||
-    rulesResult.hasDiff;
+  const runners: Record<GenerationStepId, () => Promise<FeatureGenerateResult>> = {
+    ignore: () => generateIgnoreCore({ config, logger }),
+    mcp: () => generateMcpCore({ config, logger }),
+    commands: () => generateCommandsCore({ config, logger }),
+    subagents: () => generateSubagentsCore({ config, logger }),
+    skills: async () => {
+      skillsResult = await generateSkillsCore({ config, logger });
+      return skillsResult;
+    },
+    hooks: () => generateHooksCore({ config, logger }),
+    permissions: () => generatePermissionsCore({ config, logger }),
+    rules: () => generateRulesCore({ config, logger, skills: skillsResult?.skills }),
+  };
+
+  const steps: GenerationStep[] = GENERATION_STEP_GRAPH.map((meta) => ({
+    ...meta,
+    run: runners[meta.id],
+  }));
+
+  const orderedSteps = resolveExecutionOrder(steps);
+
+  const resultsById = new Map<GenerationStepId, FeatureGenerateResult>();
+  for (const step of orderedSteps) {
+    resultsById.set(step.id, await step.run());
+  }
+
+  if (!skillsResult) {
+    throw new Error("Skills generation step did not run.");
+  }
+
+  const get = (id: GenerationStepId): FeatureGenerateResult => {
+    const result = resultsById.get(id);
+    if (!result) {
+      throw new Error(`Missing generation result for step '${id}'.`);
+    }
+    return result;
+  };
+
+  const hasDiff = orderedSteps.some((step) => get(step.id).hasDiff);
 
   return {
-    rulesCount: rulesResult.count,
-    rulesPaths: rulesResult.paths,
-    ignoreCount: ignoreResult.count,
-    ignorePaths: ignoreResult.paths,
-    mcpCount: mcpResult.count,
-    mcpPaths: mcpResult.paths,
-    commandsCount: commandsResult.count,
-    commandsPaths: commandsResult.paths,
-    subagentsCount: subagentsResult.count,
-    subagentsPaths: subagentsResult.paths,
+    rulesCount: get("rules").count,
+    rulesPaths: get("rules").paths,
+    ignoreCount: get("ignore").count,
+    ignorePaths: get("ignore").paths,
+    mcpCount: get("mcp").count,
+    mcpPaths: get("mcp").paths,
+    commandsCount: get("commands").count,
+    commandsPaths: get("commands").paths,
+    subagentsCount: get("subagents").count,
+    subagentsPaths: get("subagents").paths,
     skillsCount: skillsResult.count,
     skillsPaths: skillsResult.paths,
-    hooksCount: hooksResult.count,
-    hooksPaths: hooksResult.paths,
+    hooksCount: get("hooks").count,
+    hooksPaths: get("hooks").paths,
+    permissionsCount: get("permissions").count,
+    permissionsPaths: get("permissions").paths,
     skills: skillsResult.skills,
     hasDiff,
   };
 }
 
+// Maps every root-rule file path a target actually emits to that target, so
+// `generate --check` can skip root files a (CLI-selected) target does not own.
+//
+// Ownership is "last target in config order wins": the loop iterates the config
+// file's full target list and `Map.set` overwrites, so the final writer in
+// config order owns a shared path — consistent with generation write order,
+// where the last target's content is what ends up on disk.
+//
+// Note: a single ownership decision is applied uniformly across all output
+// roots (paths are output-root-relative). Multi-output-root `--check` would
+// need per-output-root keying; that is out of scope here.
+function computeRootFileOwnership(params: {
+  targets: ToolTarget[];
+  global: boolean;
+}): Map<string, ToolTarget> {
+  const ownerByPath = new Map<string, ToolTarget>();
+  const register = (
+    relativeDirPath: string,
+    relativeFilePath: string,
+    target: ToolTarget,
+  ): void => {
+    ownerByPath.set(toPosixPath(join(relativeDirPath, relativeFilePath)), target);
+  };
+  for (const target of params.targets) {
+    const factory = RulesProcessor.getFactory(target);
+    if (!factory) continue;
+    const paths = factory.class.getSettablePaths({ global: params.global });
+    if ("root" in paths && paths.root) {
+      register(paths.root.relativeDirPath, paths.root.relativeFilePath, target);
+    }
+    // Secondary/fallback root locations a target recognizes are attributed to
+    // it as well, so a shared collision at one of those paths is skipped for
+    // non-owning targets.
+    if ("alternativeRoots" in paths && paths.alternativeRoots) {
+      for (const alt of paths.alternativeRoots) {
+        register(alt.relativeDirPath, alt.relativeFilePath, target);
+      }
+    }
+    // Some targets (e.g. rovodev) mirror their primary root — which lives in a
+    // subdirectory — to a project-root `./AGENTS.md` at generation time (project
+    // scope only). That mirror is exactly the shared-collision path, so it must
+    // be attributed to the target too, otherwise ownership/skip decisions invert.
+    // (For rovodev this overlaps its `alternativeRoots` today; the explicit
+    // block keeps ownership correct even if that alt root is ever removed.)
+    if (!params.global && factory.meta.mirrorsRootToAgentsMd) {
+      register(".", AGENTSMD_RULE_FILE_NAME, target);
+    }
+  }
+  return ownerByPath;
+}
+
 async function generateRulesCore(params: {
   config: Config;
+  logger: Logger;
   skills?: RulesyncSkill[];
 }): Promise<FeatureGenerateResult> {
-  const { config, skills } = params;
+  const { config, logger, skills } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -187,33 +480,53 @@ async function generateRulesCore(params: {
 
   const supportedTargets = RulesProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedTargets);
-  warnUnsupportedTargets({ config, supportedTargets, featureName: "rules" });
+  warnUnsupportedTargets({ config, supportedTargets, featureName: "rules", logger });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  const isCheck = config.getCheck();
+  const rootFileOwner = isCheck
+    ? computeRootFileOwnership({
+        targets: config.getConfigFileTargets(),
+        global: config.getGlobal(),
+      })
+    : new Map<string, ToolTarget>();
+
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if rules feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("rules")) {
         continue;
       }
 
       const processor = new RulesProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         simulateCommands: config.getSimulateCommands(),
         simulateSubagents: config.getSimulateSubagents(),
         simulateSkills: config.getSimulateSkills(),
         skills: skills,
+        featureOptions: config.getFeatureOptions(toolTarget, "rules"),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
 
-      const result = await processFeatureGeneration({
+      const skipFilePaths = new Set<string>();
+      if (isCheck) {
+        for (const [rootPath, owner] of rootFileOwner) {
+          if (owner !== toolTarget) {
+            skipFilePaths.add(rootPath);
+          }
+        }
+      }
+
+      const result = await processFeatureWithRulesyncFiles({
         config,
         processor,
-        toolFiles,
+        rulesyncFiles,
+        skipFilePaths: skipFilePaths.size > 0 ? skipFilePaths : undefined,
       });
 
       totalCount += result.count;
@@ -225,14 +538,18 @@ async function generateRulesCore(params: {
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateIgnoreCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   const supportedIgnoreTargets = IgnoreProcessor.getToolTargets();
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedIgnoreTargets,
     featureName: "ignore",
+    logger,
   });
 
   if (config.getGlobal()) {
@@ -249,37 +566,31 @@ async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGe
       continue;
     }
 
-    for (const baseDir of config.getBaseDirs()) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       try {
         const processor = new IgnoreProcessor({
-          baseDir: baseDir === process.cwd() ? "." : baseDir,
+          // Pass `outputRoot` verbatim. The legacy
+          // `outputRoot === process.cwd() ? "." : outputRoot` heuristic was a
+          // leftover from before `outputRoots` was always resolved to absolute
+          // paths in `ConfigResolver`; with that change it is now consistent
+          // to pass the same `outputRoot` value the other processors receive.
+          outputRoot,
+          inputRoot: config.getInputRoot(),
           toolTarget,
           dryRun: config.isPreviewMode(),
+          logger,
+          featureOptions: config.getFeatureOptions(toolTarget, "ignore"),
         });
 
         const rulesyncFiles = await processor.loadRulesyncFiles();
-        let result;
-
-        if (rulesyncFiles.length > 0) {
-          const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-          result = await processFeatureGeneration({
-            config,
-            processor,
-            toolFiles,
-          });
-        } else {
-          result = await processEmptyFeatureGeneration({
-            config,
-            processor,
-          });
-        }
+        const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
         totalCount += result.count;
         allPaths.push(...result.paths);
         if (result.hasDiff) hasDiff = true;
       } catch (error) {
         logger.warn(
-          `Failed to generate ${toolTarget} ignore files for ${baseDir}: ${formatError(error)}`,
+          `Failed to generate ${toolTarget} ignore files for ${outputRoot}: ${formatError(error)}`,
         );
         continue;
       }
@@ -289,8 +600,11 @@ async function generateIgnoreCore(params: { config: Config }): Promise<FeatureGe
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateMcpCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateMcpCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -298,30 +612,31 @@ async function generateMcpCore(params: { config: Config }): Promise<FeatureGener
 
   const supportedMcpTargets = McpProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedMcpTargets);
-  warnUnsupportedTargets({ config, supportedTargets: supportedMcpTargets, featureName: "mcp" });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedMcpTargets,
+    featureName: "mcp",
+    logger,
+  });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if mcp feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("mcp")) {
         continue;
       }
 
       const processor = new McpProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-
-      const result = await processFeatureGeneration({
-        config,
-        processor,
-        toolFiles,
-      });
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
@@ -332,8 +647,11 @@ async function generateMcpCore(params: { config: Config }): Promise<FeatureGener
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateCommandsCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateCommandsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -347,30 +665,33 @@ async function generateCommandsCore(params: { config: Config }): Promise<Feature
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedCommandsTargets,
+    simulatedTargets: CommandsProcessor.getToolTargetsSimulated(),
     featureName: "commands",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if commands feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("commands")) {
         continue;
       }
 
       const processor = new CommandsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
 
-      const result = await processFeatureGeneration({
+      const result = await processFeatureWithRulesyncFiles({
         config,
         processor,
-        toolFiles,
+        rulesyncFiles,
       });
 
       totalCount += result.count;
@@ -382,8 +703,11 @@ async function generateCommandsCore(params: { config: Config }): Promise<Feature
   return { count: totalCount, paths: allPaths, hasDiff };
 }
 
-async function generateSubagentsCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateSubagentsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -397,31 +721,29 @@ async function generateSubagentsCore(params: { config: Config }): Promise<Featur
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedSubagentsTargets,
+    simulatedTargets: SubagentsProcessor.getToolTargetsSimulated(),
     featureName: "subagents",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if subagents feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("subagents")) {
         continue;
       }
 
       const processor = new SubagentsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-
-      const result = await processFeatureGeneration({
-        config,
-        processor,
-        toolFiles,
-      });
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
@@ -434,8 +756,9 @@ async function generateSubagentsCore(params: { config: Config }): Promise<Featur
 
 async function generateSkillsCore(params: {
   config: Config;
+  logger: Logger;
 }): Promise<FeatureGenerateResult & { skills: RulesyncSkill[] }> {
-  const { config } = params;
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -450,21 +773,25 @@ async function generateSkillsCore(params: {
   warnUnsupportedTargets({
     config,
     supportedTargets: supportedSkillsTargets,
+    simulatedTargets: SkillsProcessor.getToolTargetsSimulated(),
     featureName: "skills",
+    logger,
   });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if skills feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("skills")) {
         continue;
       }
 
       const processor = new SkillsProcessor({
-        baseDir: baseDir,
+        outputRoot: outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget: toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncDirs = await processor.loadRulesyncDirs();
@@ -492,8 +819,11 @@ async function generateSkillsCore(params: {
   return { count: totalCount, paths: allPaths, skills: allSkills, hasDiff };
 }
 
-async function generateHooksCore(params: { config: Config }): Promise<FeatureGenerateResult> {
-  const { config } = params;
+async function generateHooksCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
 
   let totalCount = 0;
   const allPaths: string[] = [];
@@ -501,42 +831,89 @@ async function generateHooksCore(params: { config: Config }): Promise<FeatureGen
 
   const supportedHooksTargets = HooksProcessor.getToolTargets({ global: config.getGlobal() });
   const toolTargets = intersection(config.getTargets(), supportedHooksTargets);
-  warnUnsupportedTargets({ config, supportedTargets: supportedHooksTargets, featureName: "hooks" });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedHooksTargets,
+    featureName: "hooks",
+    logger,
+  });
 
-  for (const baseDir of config.getBaseDirs()) {
-    for (const toolTarget of toolTargets) {
+  for (const toolTarget of toolTargets) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
       // Check if hooks feature is enabled for this specific target
       if (!config.getFeatures(toolTarget).includes("hooks")) {
         continue;
       }
 
       const processor = new HooksProcessor({
-        baseDir,
+        outputRoot,
+        inputRoot: config.getInputRoot(),
         toolTarget,
         global: config.getGlobal(),
         dryRun: config.isPreviewMode(),
+        logger,
       });
 
       const rulesyncFiles = await processor.loadRulesyncFiles();
-      let result;
-
-      if (rulesyncFiles.length === 0) {
-        result = await processEmptyFeatureGeneration({
-          config,
-          processor,
-        });
-      } else {
-        const toolFiles = await processor.convertRulesyncFilesToToolFiles(rulesyncFiles);
-        result = await processFeatureGeneration({
-          config,
-          processor,
-          toolFiles,
-        });
-      }
+      const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
 
       totalCount += result.count;
       allPaths.push(...result.paths);
       if (result.hasDiff) hasDiff = true;
+    }
+  }
+
+  return { count: totalCount, paths: allPaths, hasDiff };
+}
+
+async function generatePermissionsCore(params: {
+  config: Config;
+  logger: Logger;
+}): Promise<FeatureGenerateResult> {
+  const { config, logger } = params;
+
+  const supportedPermissionsTargets = PermissionsProcessor.getToolTargets({
+    global: config.getGlobal(),
+  });
+  warnUnsupportedTargets({
+    config,
+    supportedTargets: supportedPermissionsTargets,
+    featureName: "permissions",
+    logger,
+  });
+
+  let totalCount = 0;
+  const allPaths: string[] = [];
+  let hasDiff = false;
+
+  for (const toolTarget of intersection(config.getTargets(), supportedPermissionsTargets)) {
+    for (const outputRoot of config.getOutputRoots(toolTarget)) {
+      if (!config.getFeatures(toolTarget).includes("permissions")) {
+        continue;
+      }
+
+      try {
+        const processor = new PermissionsProcessor({
+          outputRoot,
+          inputRoot: config.getInputRoot(),
+          toolTarget,
+          global: config.getGlobal(),
+          dryRun: config.isPreviewMode(),
+          logger,
+        });
+
+        const rulesyncFiles = await processor.loadRulesyncFiles();
+        const result = await processFeatureWithRulesyncFiles({ config, processor, rulesyncFiles });
+
+        totalCount += result.count;
+        allPaths.push(...result.paths);
+        if (result.hasDiff) hasDiff = true;
+      } catch (error) {
+        logger.warn(
+          `Failed to generate ${toolTarget} permissions files for ${outputRoot}: ${formatError(error)}`,
+        );
+        continue;
+      }
     }
   }
 

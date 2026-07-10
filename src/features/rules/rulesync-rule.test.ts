@@ -35,7 +35,7 @@ describe("RulesyncRule", () => {
       };
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter,
@@ -54,7 +54,7 @@ describe("RulesyncRule", () => {
 
       expect(() => {
         const rule = new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: "rules",
           relativeFilePath: "test.md",
           frontmatter: invalidFrontmatter,
@@ -72,7 +72,7 @@ describe("RulesyncRule", () => {
 
       expect(() => {
         const rule = new RulesyncRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: "rules",
           relativeFilePath: "test.md",
           frontmatter: invalidFrontmatter,
@@ -87,7 +87,7 @@ describe("RulesyncRule", () => {
       const frontmatter: RulesyncRuleFrontmatterInput = {};
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter,
@@ -107,7 +107,7 @@ describe("RulesyncRule", () => {
       };
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "local-root.md",
         frontmatter,
@@ -131,7 +131,7 @@ describe("RulesyncRule", () => {
       };
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "cursor-rule.md",
         frontmatter,
@@ -156,7 +156,7 @@ describe("RulesyncRule", () => {
       };
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter,
@@ -172,7 +172,7 @@ describe("RulesyncRule", () => {
       const body = "This is the rule content\nwith multiple lines";
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter: {},
@@ -193,7 +193,7 @@ describe("RulesyncRule", () => {
       };
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter,
@@ -213,7 +213,7 @@ describe("RulesyncRule", () => {
       } as any;
 
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter: invalidFrontmatter,
@@ -229,7 +229,7 @@ describe("RulesyncRule", () => {
     it("should return success when frontmatter is undefined", () => {
       // Create a rule with undefined frontmatter by bypassing the constructor
       const rule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: "rules",
         relativeFilePath: "test.md",
         frontmatter: {} as any,
@@ -332,6 +332,23 @@ Invalid rule`;
       ).rejects.toThrow("Invalid frontmatter");
     });
 
+    it("should throw error when frontmatter is missing (issue #316)", async () => {
+      const rulesDir = join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH);
+      await ensureDir(rulesDir);
+
+      // A markdown file without any YAML frontmatter fence
+      const ruleContent = "This is just plain markdown without frontmatter.";
+
+      const filePath = join(rulesDir, "no-frontmatter.md");
+      await writeFileContent(filePath, ruleContent);
+
+      await expect(
+        RulesyncRule.fromFile({
+          relativeFilePath: "no-frontmatter.md",
+        }),
+      ).rejects.toThrow("Missing frontmatter");
+    });
+
     it("should handle cursor configuration in frontmatter", async () => {
       const rulesDir = join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH);
       await ensureDir(rulesDir);
@@ -399,6 +416,94 @@ Subproject-specific rule body`;
         },
       });
       expect(rule.getBody()).toBe("Subproject-specific rule body");
+    });
+
+    it("should handle copilot configuration in frontmatter", async () => {
+      const rulesDir = join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH);
+      await ensureDir(rulesDir);
+
+      const ruleContent = `---
+root: false
+targets:
+  - copilot
+description: Copilot rule
+copilot:
+  excludeAgent: "code-review"
+---
+
+Copilot-specific rule body`;
+
+      const filePath = join(rulesDir, "copilot-rule.md");
+      await writeFileContent(filePath, ruleContent);
+
+      const rule = await RulesyncRule.fromFile({
+        relativeFilePath: "copilot-rule.md",
+      });
+
+      expect(rule.getFrontmatter().copilot).toEqual({
+        excludeAgent: "code-review",
+      });
+      expect(rule.getBody()).toBe("Copilot-specific rule body");
+    });
+
+    it("should handle claudecode configuration in frontmatter", async () => {
+      const rulesDir = join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH);
+      await ensureDir(rulesDir);
+
+      const ruleContent = `---
+root: false
+targets:
+  - claudecode
+description: Claude Code rule
+claudecode:
+  paths:
+    - "src/**/*.ts"
+---
+
+Claude Code-specific rule body`;
+
+      const filePath = join(rulesDir, "claudecode-rule.md");
+      await writeFileContent(filePath, ruleContent);
+
+      const rule = await RulesyncRule.fromFile({
+        relativeFilePath: "claudecode-rule.md",
+      });
+
+      expect(rule.getFrontmatter().claudecode).toEqual({
+        paths: ["src/**/*.ts"],
+      });
+      expect(rule.getBody()).toBe("Claude Code-specific rule body");
+    });
+
+    it("should handle antigravity configuration in frontmatter", async () => {
+      const rulesDir = join(testDir, RULESYNC_RULES_RELATIVE_DIR_PATH);
+      await ensureDir(rulesDir);
+
+      const ruleContent = `---
+root: false
+targets:
+  - antigravity-ide
+description: Antigravity rule
+antigravity:
+  trigger: "glob"
+  globs:
+    - "*.md"
+---
+
+Antigravity-specific rule body`;
+
+      const filePath = join(rulesDir, "antigravity-rule.md");
+      await writeFileContent(filePath, ruleContent);
+
+      const rule = await RulesyncRule.fromFile({
+        relativeFilePath: "antigravity-rule.md",
+      });
+
+      expect(rule.getFrontmatter().antigravity).toEqual({
+        trigger: "glob",
+        globs: ["*.md"],
+      });
+      expect(rule.getBody()).toBe("Antigravity-specific rule body");
     });
 
     it("should load rule with localRoot field", async () => {
@@ -641,6 +746,56 @@ This has leading and trailing whitespace.
       expect(result.success).toBe(false);
     });
 
+    it("should preserve unknown keys in tool-specific sub-schemas via z.looseObject", () => {
+      const frontmatter = {
+        cursor: {
+          alwaysApply: true,
+          futureField: "preserved",
+        },
+        copilot: {
+          excludeAgent: "code-review" as const,
+          newOption: 42,
+        },
+        claudecode: {
+          paths: ["src/**/*.ts"],
+          experimentalFlag: true,
+        },
+        antigravity: {
+          trigger: "glob",
+          globs: ["*.md"],
+          extraSetting: "kept",
+        },
+        agentsmd: {
+          subprojectPath: "packages/app",
+          unknownProp: ["a", "b"],
+        },
+      };
+
+      const result = RulesyncRuleFrontmatterSchema.safeParse(frontmatter);
+      expect(result.success).toBe(true);
+      expect(result.data?.cursor).toEqual({
+        alwaysApply: true,
+        futureField: "preserved",
+      });
+      expect(result.data?.copilot).toEqual({
+        excludeAgent: "code-review",
+        newOption: 42,
+      });
+      expect(result.data?.claudecode).toEqual({
+        paths: ["src/**/*.ts"],
+        experimentalFlag: true,
+      });
+      expect(result.data?.antigravity).toEqual({
+        trigger: "glob",
+        globs: ["*.md"],
+        extraSetting: "kept",
+      });
+      expect(result.data?.agentsmd).toEqual({
+        subprojectPath: "packages/app",
+        unknownProp: ["a", "b"],
+      });
+    });
+
     it("should allow partial cursor configuration", () => {
       const frontmatter = {
         cursor: {
@@ -737,7 +892,7 @@ export interface ExampleInterface {
 
       // Test that the rule can be recreated with constructor
       const recreatedRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "integration-test.md",
         frontmatter: rule.getFrontmatter(),

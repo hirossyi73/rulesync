@@ -40,7 +40,7 @@ describe("CursorSkill", () => {
   describe("constructor", () => {
     it("should create instance with valid content", () => {
       const skill = new CursorSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".cursor", "skills"),
         dirName: "test-skill",
         frontmatter: {
@@ -73,7 +73,7 @@ This is the body of the cursor skill.`;
       await writeFileContent(join(skillDir, SKILL_FILE_NAME), skillContent);
 
       const skill = await CursorSkill.fromDir({
-        baseDir: testDir,
+        outputRoot: testDir,
         dirName: "test-skill",
       });
 
@@ -91,7 +91,7 @@ This is the body of the cursor skill.`;
 
       await expect(
         CursorSkill.fromDir({
-          baseDir: testDir,
+          outputRoot: testDir,
           dirName: "empty-skill",
         }),
       ).rejects.toThrow(/SKILL\.md not found/);
@@ -101,7 +101,7 @@ This is the body of the cursor skill.`;
   describe("fromRulesyncSkill", () => {
     it("should create instance from RulesyncSkill", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "test-skill",
         frontmatter: {
@@ -129,7 +129,7 @@ This is the body of the cursor skill.`;
   describe("isTargetedByRulesyncSkill", () => {
     it("should return true when targets includes '*'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "all-targets-skill",
         frontmatter: {
@@ -146,7 +146,7 @@ This is the body of the cursor skill.`;
 
     it("should return true when targets includes 'cursor'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "cursor-skill",
         frontmatter: {
@@ -163,7 +163,7 @@ This is the body of the cursor skill.`;
 
     it("should return false when targets does not include 'cursor'", () => {
       const rulesyncSkill = new RulesyncSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
         dirName: "claudecode-only-skill",
         frontmatter: {
@@ -182,7 +182,7 @@ This is the body of the cursor skill.`;
   describe("toRulesyncSkill", () => {
     it("should convert to RulesyncSkill", () => {
       const skill = new CursorSkill({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".cursor", "skills"),
         dirName: "test-skill",
         frontmatter: {
@@ -203,6 +203,78 @@ This is the body of the cursor skill.`;
       });
       expect(rulesyncSkill.getBody()).toBe("Test body");
     });
+
+    it("should carry paths/disable-model-invocation/metadata through the cursor section and round-trip", () => {
+      const skill = new CursorSkill({
+        outputRoot: testDir,
+        relativeDirPath: join(".cursor", "skills"),
+        dirName: "scoped-skill",
+        frontmatter: {
+          name: "Scoped Skill",
+          description: "Scoped",
+          paths: ["src/**/*.ts"],
+          "disable-model-invocation": true,
+          metadata: { author: "rulesync" },
+        },
+        body: "Body",
+        validate: true,
+      });
+
+      const rulesyncSkill = skill.toRulesyncSkill();
+      expect(rulesyncSkill.getFrontmatter().cursor).toEqual({
+        paths: ["src/**/*.ts"],
+        "disable-model-invocation": true,
+        metadata: { author: "rulesync" },
+      });
+
+      const roundTripped = CursorSkill.fromRulesyncSkill({ rulesyncSkill });
+      const fm = roundTripped.getFrontmatter();
+      expect(fm.paths).toEqual(["src/**/*.ts"]);
+      expect(fm["disable-model-invocation"]).toBe(true);
+      expect(fm.metadata).toEqual({ author: "rulesync" });
+    });
+
+    it("should pick up root-level disable-model-invocation when cursor section omits it", () => {
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "root-default",
+        frontmatter: {
+          name: "Root Default",
+          description: "Root-level flag",
+          "disable-model-invocation": true,
+        },
+        body: "Body",
+      });
+
+      const cursorSkill = CursorSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(cursorSkill.getFrontmatter()["disable-model-invocation"]).toBe(true);
+    });
+
+    it("should let cursor disable-model-invocation override the root-level value", () => {
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "override",
+        frontmatter: {
+          name: "Override",
+          description: "Cursor opts out of root default",
+          "disable-model-invocation": true,
+          cursor: { "disable-model-invocation": false },
+        },
+        body: "Body",
+      });
+
+      const cursorSkill = CursorSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(cursorSkill.getFrontmatter()["disable-model-invocation"]).toBe(false);
+    });
+
+    it("should omit disable-model-invocation when neither root nor cursor set it", () => {
+      const rulesyncSkill = new RulesyncSkill({
+        dirName: "no-flag",
+        frontmatter: { name: "No Flag", description: "No flag" },
+        body: "Body",
+      });
+
+      const cursorSkill = CursorSkill.fromRulesyncSkill({ rulesyncSkill });
+      expect(cursorSkill.getFrontmatter()["disable-model-invocation"]).toBeUndefined();
+    });
   });
 
   describe("forDeletion", () => {
@@ -217,14 +289,14 @@ This is the body of the cursor skill.`;
       expect(skill.getGlobal()).toBe(false);
     });
 
-    it("should use process.cwd() as default baseDir", () => {
+    it("should use process.cwd() as default outputRoot", () => {
       const skill = CursorSkill.forDeletion({
         dirName: "cleanup",
         relativeDirPath: join(".cursor", "skills"),
       });
 
       expect(skill).toBeInstanceOf(CursorSkill);
-      expect(skill.getBaseDir()).toBe(testDir);
+      expect(skill.getOutputRoot()).toBe(testDir);
     });
 
     it("should create instance with empty frontmatter for deletion", () => {

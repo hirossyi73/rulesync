@@ -130,7 +130,10 @@ describe("ClaudecodeRule (Modular Rules)", () => {
         relativeDirPath: ".claude",
         relativeFilePath: "CLAUDE.md",
       });
-      expect(paths).not.toHaveProperty("nonRoot");
+      // Global non-root rules go to ~/.claude/rules/*.md (Claude Code user-level rules).
+      expect(paths.nonRoot).toEqual({
+        relativeDirPath: ".claude/rules",
+      });
     });
 
     it("should not return alternativeRoots for global mode", () => {
@@ -148,7 +151,7 @@ describe("ClaudecodeRule (Modular Rules)", () => {
       await writeFileContent(join(claudeDir, "CLAUDE.md"), testContent);
 
       const claudecodeRule = await ClaudecodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "CLAUDE.md",
         relativeDirPath: ".claude",
       });
@@ -165,7 +168,7 @@ describe("ClaudecodeRule (Modular Rules)", () => {
       await writeFileContent(join(testDir, "CLAUDE.md"), testContent);
 
       const claudecodeRule = await ClaudecodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "CLAUDE.md",
       });
 
@@ -190,7 +193,7 @@ Rules for TypeScript files.`;
       await writeFileContent(join(rulesDir, "typescript.md"), testContent);
 
       const claudecodeRule = await ClaudecodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "typescript.md",
       });
 
@@ -208,7 +211,7 @@ Rules for TypeScript files.`;
       await writeFileContent(join(rulesDir, "general.md"), testContent);
 
       const claudecodeRule = await ClaudecodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "general.md",
       });
 
@@ -219,7 +222,7 @@ Rules for TypeScript files.`;
     it("should throw error when file does not exist", async () => {
       await expect(
         ClaudecodeRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "nonexistent.md",
         }),
       ).rejects.toThrow();
@@ -318,7 +321,7 @@ Rules for TypeScript files.`;
   describe("toRulesyncRule", () => {
     it("should convert ClaudecodeRule to RulesyncRule for root rule", () => {
       const claudecodeRule = new ClaudecodeRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: "CLAUDE.md",
         frontmatter: {},
@@ -338,7 +341,7 @@ Rules for TypeScript files.`;
 
     it("should convert ClaudecodeRule to RulesyncRule for non-root rule with paths", () => {
       const claudecodeRule = new ClaudecodeRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/rules",
         relativeFilePath: "typescript.md",
         frontmatter: { paths: ["src/**/*.ts", "tests/**/*.ts"] },
@@ -393,7 +396,7 @@ Rules for TypeScript files.`;
   describe("isTargetedByRulesyncRule", () => {
     it("should return true for rules targeting claudecode", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -407,7 +410,7 @@ Rules for TypeScript files.`;
 
     it("should return true for rules targeting all tools (*)", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -421,7 +424,7 @@ Rules for TypeScript files.`;
 
     it("should return false for rules not targeting claudecode", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -435,7 +438,7 @@ Rules for TypeScript files.`;
 
     it("should return false for rules targeting only claudecode-legacy (not modular)", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -456,7 +459,7 @@ Rules for TypeScript files.`;
       await writeFileContent(join(globalDir, "CLAUDE.md"), testContent);
 
       const claudecodeRule = await ClaudecodeRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "CLAUDE.md",
         global: true,
       });
@@ -492,6 +495,29 @@ Rules for TypeScript files.`;
       expect(claudecodeRule.getRelativeFilePath()).toBe("CLAUDE.md");
       expect(claudecodeRule.isRoot()).toBe(true);
     });
+
+    it("should write a non-root rule to ~/.claude/rules when global=true", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
+        relativeFilePath: "coding-style.md",
+        frontmatter: {
+          root: false,
+          targets: ["*"],
+          description: "Global non-root rule",
+          globs: [],
+        },
+        body: "# Coding style\n\nApplies to every project.",
+      });
+
+      const claudecodeRule = ClaudecodeRule.fromRulesyncRule({
+        rulesyncRule,
+        global: true,
+      });
+
+      expect(claudecodeRule.getRelativeDirPath()).toBe(".claude/rules");
+      expect(claudecodeRule.getRelativeFilePath()).toBe("coding-style.md");
+      expect(claudecodeRule.isRoot()).toBe(false);
+    });
   });
 
   describe("integration tests", () => {
@@ -499,7 +525,7 @@ Rules for TypeScript files.`;
       const originalBody = "# Roundtrip Test\n\nContent should remain the same.";
 
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "roundtrip.md",
         frontmatter: {
@@ -512,7 +538,7 @@ Rules for TypeScript files.`;
       });
 
       const claudecodeRule = ClaudecodeRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 
@@ -529,7 +555,7 @@ Rules for TypeScript files.`;
       const originalPaths = ["src/**/*.ts", "tests/**/*.ts"];
 
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "typescript.md",
         frontmatter: {
@@ -541,7 +567,7 @@ Rules for TypeScript files.`;
       });
 
       const claudecodeRule = ClaudecodeRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 

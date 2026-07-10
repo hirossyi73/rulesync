@@ -2,11 +2,13 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { CURSOR_SKILLS_DIR_PATH } from "../../constants/cursor-paths.js";
 import { SKILL_FILE_NAME } from "../../constants/general.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
 import { formatError } from "../../utils/error.js";
 import { RulesyncSkill, RulesyncSkillFrontmatterInput, SkillFile } from "./rulesync-skill.js";
+import { resolveDisableModelInvocation } from "./skills-utils.js";
 import {
   ToolSkill,
   ToolSkillForDeletionParams,
@@ -15,15 +17,19 @@ import {
   ToolSkillSettablePaths,
 } from "./tool-skill.js";
 
-export const CursorSkillFrontmatterSchema = z.looseObject({
+const CursorSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
+  // Optional Cursor SKILL.md frontmatter. https://cursor.com/docs/skills
+  paths: z.optional(z.union([z.string(), z.array(z.string())])),
+  "disable-model-invocation": z.optional(z.boolean()),
+  metadata: z.optional(z.looseObject({})),
 });
 
 export type CursorSkillFrontmatter = z.infer<typeof CursorSkillFrontmatterSchema>;
 
 export type CursorSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: CursorSkillFrontmatter;
@@ -39,8 +45,8 @@ export type CursorSkillParams = {
  */
 export class CursorSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".cursor", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = CURSOR_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -49,7 +55,7 @@ export class CursorSkill extends ToolSkill {
     global = false,
   }: CursorSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -71,11 +77,11 @@ export class CursorSkill extends ToolSkill {
 
   static getSettablePaths(_options?: { global?: boolean }): ToolSkillSettablePaths {
     // Cursor skills use the same relative path for both project and global modes
-    // The actual location differs based on baseDir:
+    // The actual location differs based on outputRoot:
     // - Project mode: {process.cwd()}/.cursor/skills/
     // - Global mode: {getHomeDirectory()}/.cursor/skills/
     return {
-      relativeDirPath: join(".cursor", "skills"),
+      relativeDirPath: CURSOR_SKILLS_DIR_PATH,
     };
   }
 
@@ -111,14 +117,22 @@ export class CursorSkill extends ToolSkill {
 
   toRulesyncSkill(): RulesyncSkill {
     const frontmatter = this.getFrontmatter();
+    const cursorSection = {
+      ...(frontmatter.paths !== undefined && { paths: frontmatter.paths }),
+      ...(frontmatter["disable-model-invocation"] !== undefined && {
+        "disable-model-invocation": frontmatter["disable-model-invocation"],
+      }),
+      ...(frontmatter.metadata !== undefined && { metadata: frontmatter.metadata }),
+    };
     const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
       name: frontmatter.name,
       description: frontmatter.description,
       targets: ["*"],
+      ...(Object.keys(cursorSection).length > 0 && { cursor: cursorSection }),
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -130,21 +144,31 @@ export class CursorSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
   }: ToolSkillFromRulesyncSkillParams): CursorSkill {
     const settablePaths = CursorSkill.getSettablePaths({ global });
     const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+    const cursorSection = rulesyncFrontmatter.cursor;
+    const resolvedDisableModelInvocation = resolveDisableModelInvocation({
+      rootFrontmatter: rulesyncFrontmatter,
+      section: cursorSection,
+    });
 
     const cursorFrontmatter: CursorSkillFrontmatter = {
       name: rulesyncFrontmatter.name,
       description: rulesyncFrontmatter.description,
+      ...(cursorSection?.paths !== undefined && { paths: cursorSection.paths }),
+      ...(resolvedDisableModelInvocation !== undefined && {
+        "disable-model-invocation": resolvedDisableModelInvocation,
+      }),
+      ...(cursorSection?.metadata !== undefined && { metadata: cursorSection.metadata }),
     };
 
     return new CursorSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rulesyncSkill.getDirName(),
       frontmatter: cursorFrontmatter,
@@ -168,14 +192,14 @@ export class CursorSkill extends ToolSkill {
 
     const result = CursorSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
     }
 
     return new CursorSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -187,14 +211,14 @@ export class CursorSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): CursorSkill {
     const settablePaths = CursorSkill.getSettablePaths({ global });
     return new CursorSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: relativeDirPath ?? settablePaths.relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

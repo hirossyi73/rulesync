@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { uniq } from "es-toolkit";
 
+import { ZED_DIR, ZED_SETTINGS_FILE_NAME } from "../../constants/zed-paths.js";
 import { fileExists, readFileContent } from "../../utils/file.js";
 import { RulesyncIgnore } from "./rulesync-ignore.js";
 import {
@@ -29,8 +30,8 @@ export class ZedIgnore extends ToolIgnore {
 
   static getSettablePaths(): ToolIgnoreSettablePaths {
     return {
-      relativeDirPath: ".zed",
-      relativeFilePath: "settings.json",
+      relativeDirPath: ZED_DIR,
+      relativeFilePath: ZED_SETTINGS_FILE_NAME,
     };
   }
 
@@ -51,7 +52,7 @@ export class ZedIgnore extends ToolIgnore {
     const fileContent = rulesyncPatterns.join("\n");
 
     return new RulesyncIgnore({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RulesyncIgnore.getSettablePaths().recommended.relativeDirPath,
       relativeFilePath: RulesyncIgnore.getSettablePaths().recommended.relativeFilePath,
       fileContent,
@@ -59,7 +60,7 @@ export class ZedIgnore extends ToolIgnore {
   }
 
   static async fromRulesyncIgnore({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncIgnore,
   }: ToolIgnoreFromRulesyncIgnoreParams): Promise<ZedIgnore> {
     const fileContent = rulesyncIgnore.getFileContent();
@@ -70,7 +71,7 @@ export class ZedIgnore extends ToolIgnore {
       .filter((line) => line.length > 0 && !line.startsWith("#"));
 
     const filePath = join(
-      baseDir,
+      outputRoot,
       this.getSettablePaths().relativeDirPath,
       this.getSettablePaths().relativeFilePath,
     );
@@ -88,7 +89,7 @@ export class ZedIgnore extends ToolIgnore {
     };
 
     return new ZedIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: JSON.stringify(jsonValue, null, 2),
@@ -97,19 +98,19 @@ export class ZedIgnore extends ToolIgnore {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolIgnoreFromFileParams): Promise<ZedIgnore> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new ZedIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: fileContent,
@@ -118,12 +119,12 @@ export class ZedIgnore extends ToolIgnore {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolIgnoreForDeletionParams): ZedIgnore {
     return new ZedIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",

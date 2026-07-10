@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod/mini";
 
 import { SKILL_FILE_NAME } from "../../constants/general.js";
+import { REPLIT_SKILLS_DIR_PATH } from "../../constants/replit-paths.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
 import { formatError } from "../../utils/error.js";
@@ -15,15 +16,19 @@ import {
   ToolSkillSettablePaths,
 } from "./tool-skill.js";
 
-export const ReplitSkillFrontmatterSchema = z.looseObject({
+const ReplitSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
+  "allowed-tools": z.optional(z.array(z.string())),
+  license: z.optional(z.string()),
+  compatibility: z.optional(z.looseObject({})),
+  metadata: z.optional(z.looseObject({})),
 });
 
 export type ReplitSkillFrontmatter = z.infer<typeof ReplitSkillFrontmatterSchema>;
 
 export type ReplitSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: ReplitSkillFrontmatter;
@@ -40,8 +45,8 @@ export type ReplitSkillParams = {
  */
 export class ReplitSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".agents", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = REPLIT_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -50,7 +55,7 @@ export class ReplitSkill extends ToolSkill {
     global = false,
   }: ReplitSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -70,12 +75,16 @@ export class ReplitSkill extends ToolSkill {
     }
   }
 
-  static getSettablePaths(options?: { global?: boolean }): ToolSkillSettablePaths {
-    if (options?.global) {
-      throw new Error("ReplitSkill does not support global mode.");
-    }
+  static getSettablePaths(_options?: { global?: boolean }): ToolSkillSettablePaths {
+    // Replit Agent Skills document a user-level (personal) scope in addition to
+    // the project scope, and follow the open Agent Skills standard, which defines
+    // `.agents/skills/` (project) and `~/.agents/skills/` (personal/global). The
+    // relative path is the same; the resolution root (cwd vs. home) is supplied
+    // via outputRoot by the processor.
+    // https://docs.replit.com/core-concepts/agent/skills (user-level scope)
+    // https://agentskills.io/specification (`~/.agents/skills/` personal path)
     return {
-      relativeDirPath: join(".agents", "skills"),
+      relativeDirPath: REPLIT_SKILLS_DIR_PATH,
     };
   }
 
@@ -111,14 +120,25 @@ export class ReplitSkill extends ToolSkill {
 
   toRulesyncSkill(): RulesyncSkill {
     const frontmatter = this.getFrontmatter();
+    const replitBlock = {
+      ...(frontmatter["allowed-tools"] !== undefined && {
+        "allowed-tools": frontmatter["allowed-tools"],
+      }),
+      ...(frontmatter.license !== undefined && { license: frontmatter.license }),
+      ...(frontmatter.compatibility !== undefined && {
+        compatibility: frontmatter.compatibility,
+      }),
+      ...(frontmatter.metadata !== undefined && { metadata: frontmatter.metadata }),
+    };
     const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
       name: frontmatter.name,
       description: frontmatter.description,
       targets: ["*"],
+      ...(Object.keys(replitBlock).length > 0 && { replit: replitBlock }),
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -130,7 +150,7 @@ export class ReplitSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
@@ -141,10 +161,11 @@ export class ReplitSkill extends ToolSkill {
     const replitFrontmatter: ReplitSkillFrontmatter = {
       name: rulesyncFrontmatter.name,
       description: rulesyncFrontmatter.description,
+      ...rulesyncFrontmatter.replit,
     };
 
     return new ReplitSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rulesyncSkill.getDirName(),
       frontmatter: replitFrontmatter,
@@ -168,14 +189,14 @@ export class ReplitSkill extends ToolSkill {
 
     const result = ReplitSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
     }
 
     return new ReplitSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -187,14 +208,14 @@ export class ReplitSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): ReplitSkill {
     const settablePaths = ReplitSkill.getSettablePaths({ global });
     return new ReplitSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: relativeDirPath ?? settablePaths.relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

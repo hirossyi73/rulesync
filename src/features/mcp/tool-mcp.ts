@@ -1,6 +1,11 @@
-import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import {
+  RULESYNC_MCP_FILE_NAME,
+  RULESYNC_MCP_SCHEMA_URL,
+  RULESYNC_RELATIVE_DIR_PATH,
+} from "../../constants/rulesync-paths.js";
 import { AiFileFromFileParams, AiFileParams } from "../../types/ai-file.js";
 import { ToolFile } from "../../types/tool-file.js";
+import type { Logger } from "../../utils/logger.js";
 import { RulesyncMcp } from "./rulesync-mcp.js";
 
 export type ToolMcpParams = AiFileParams;
@@ -10,12 +15,18 @@ export type ToolMcpFromRulesyncMcpParams = Omit<
   "fileContent" | "relativeFilePath" | "relativeDirPath"
 > & {
   rulesyncMcp: RulesyncMcp;
+  logger?: Logger;
 };
 
-export type ToolMcpFromFileParams = Pick<AiFileFromFileParams, "baseDir" | "validate" | "global">;
+export type ToolMcpFromFileParams = Pick<
+  AiFileFromFileParams,
+  "outputRoot" | "validate" | "global"
+> & {
+  logger?: Logger;
+};
 
 export type ToolMcpForDeletionParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath: string;
   relativeFilePath: string;
   global?: boolean;
@@ -30,7 +41,7 @@ export abstract class ToolMcp extends ToolFile {
   constructor({ ...rest }: ToolMcpParams) {
     super({
       ...rest,
-      validate: true, // Skip validation during construction
+      validate: true, // ToolMcp runs subclass validation below when requested
     });
 
     // Validate after setting patterns, if validation was requested
@@ -57,11 +68,17 @@ export abstract class ToolMcp extends ToolFile {
   }: {
     fileContent?: string;
   } = {}): RulesyncMcp {
+    const content = fileContent ?? this.fileContent;
+    const { $schema: _, ...json } = JSON.parse(content);
+    const withSchema = {
+      $schema: RULESYNC_MCP_SCHEMA_URL,
+      ...json,
+    };
     return new RulesyncMcp({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
-      relativeFilePath: ".mcp.json",
-      fileContent: fileContent ?? this.fileContent,
+      relativeFilePath: RULESYNC_MCP_FILE_NAME,
+      fileContent: JSON.stringify(withSchema, null, 2),
     });
   }
 

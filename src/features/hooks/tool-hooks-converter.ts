@@ -1,4 +1,5 @@
 import type { HookEvent, HooksConfig } from "../../types/hooks.js";
+import type { Logger } from "../../utils/logger.js";
 
 type ToolMatcherEntry = {
   matcher?: string;
@@ -23,12 +24,173 @@ export type ToolHooksConverterConfig = {
   canonicalToToolEventNames: Record<string, string>;
   toolToCanonicalEventNames: Record<string, string>;
   projectDirVar: string;
+  supportedHookTypes?: ReadonlySet<"command" | "prompt" | "http">;
+  passthroughFields?: ReadonlyArray<"name" | "description">;
+  /**
+   * Per-hook boolean fields to carry through the round-trip, each mapping a
+   * canonical {@link HookDefinitionSchema} boolean field to its tool-side field
+   * name (which may differ — e.g. Junie's `blockOnError` ↔ canonical
+   * `failClosed`). Only boolean values are emitted on export and imported back;
+   * any other value is ignored so a malformed field can't leak through.
+   */
+  booleanPassthroughFields?: ReadonlyArray<{
+    readonly canonical: "failClosed" | "async";
+    readonly tool: string;
+  }>;
   /**
    * When true, only dot-relative commands (e.g. ./script.sh, ../script.sh, .rulesync/hooks/x.sh)
    * are prefixed with projectDirVar. Bare executable commands like `npx prettier ...` are left intact.
    */
   prefixDotRelativeCommandsOnly?: boolean;
+  /**
+   * Events that do not support the `matcher` field. Any matcher defined on these events
+   * will be silently dropped with a warning during export.
+   */
+  noMatcherEvents?: ReadonlySet<string>;
 };
+
+/**
+ * Filter the shared canonical hooks to the supported events and merge tool overrides on top.
+ */
+function buildEffectiveHooks({
+  config,
+  toolOverrideHooks,
+  supportedEvents,
+}: {
+  config: HooksConfig;
+  toolOverrideHooks: HooksConfig["hooks"] | undefined;
+  supportedEvents: readonly HookEvent[];
+}): HooksConfig["hooks"] {
+  const supported: Set<string> = new Set(supportedEvents);
+  const sharedHooks: HooksConfig["hooks"] = {};
+  for (const [event, defs] of Object.entries(config.hooks)) {
+    if (supported.has(event)) {
+      sharedHooks[event] = defs;
+    }
+  }
+  return {
+    ...sharedHooks,
+    ...toolOverrideHooks,
+  };
+}
+
+/**
+ * Group a list of hook definitions by their `matcher` (empty string when absent),
+ * preserving insertion order of both keys and grouped definitions.
+ */
+function groupDefinitionsByMatcher(
+  definitions: HooksConfig["hooks"][string],
+): Map<string, HooksConfig["hooks"][string]> {
+  const byMatcher = new Map<string, HooksConfig["hooks"][string]>();
+  for (const def of definitions) {
+    const key = def.matcher ?? "";
+    const list = byMatcher.get(key);
+    if (list) list.push(def);
+    else byMatcher.set(key, [def]);
+  }
+  return byMatcher;
+}
+
+/**
+ * Apply the optional project directory variable prefix to a command string.
+ */
+function applyCommandPrefix({
+  def,
+  converterConfig,
+}: {
+  def: HooksConfig["hooks"][string][number];
+  converterConfig: ToolHooksConverterConfig;
+}): unknown {
+  const commandText = def.command;
+  const trimmedCommand = typeof commandText === "string" ? commandText.trimStart() : undefined;
+  const shouldPrefix =
+    converterConfig.projectDirVar !== "" &&
+    typeof trimmedCommand === "string" &&
+    !trimmedCommand.startsWith("$") &&
+    (!converterConfig.prefixDotRelativeCommandsOnly || trimmedCommand.startsWith("."));
+
+  // Only the variable itself is quoted (not the whole command) so a project path
+  // containing a space can't be word-split by the shell, while any trailing
+  // arguments after the script path stay outside the quotes and still split normally.
+  return shouldPrefix && typeof trimmedCommand === "string"
+    ? `"${converterConfig.projectDirVar}"/${trimmedCommand.replace(/^\.\//, "")}`
+    : def.command;
+}
+
+/**
+ * Emit the configured boolean passthrough fields on the tool side, mapping each
+ * canonical field name to its (possibly renamed) tool field name. Only boolean
+ * values are carried through.
+ */
+function emitBooleanPassthroughFields({
+  def,
+  converterConfig,
+}: {
+  def: HooksConfig["hooks"][string][number];
+  converterConfig: ToolHooksConverterConfig;
+}): Record<string, boolean> {
+  return Object.fromEntries(
+    (converterConfig.booleanPassthroughFields ?? [])
+      .filter(({ canonical }) => typeof def[canonical] === "boolean")
+      .map(({ canonical, tool }) => [tool, def[canonical] as boolean]),
+  );
+}
+
+/**
+ * Import the configured boolean passthrough fields back into canonical fields,
+ * reversing {@link emitBooleanPassthroughFields}. Only boolean values are read.
+ */
+function importBooleanPassthroughFields({
+  h,
+  converterConfig,
+}: {
+  h: Record<string, unknown>;
+  converterConfig: ToolHooksConverterConfig;
+}): Record<string, boolean> {
+  return Object.fromEntries(
+    (converterConfig.booleanPassthroughFields ?? [])
+      .filter(({ tool }) => typeof h[tool] === "boolean")
+      .map(({ canonical, tool }) => [canonical, h[tool] as boolean]),
+  );
+}
+
+/**
+ * Convert the definitions of a single matcher group into tool hook entries,
+ * honoring supported hook types and passthrough fields.
+ */
+function buildToolHooks({
+  defs,
+  converterConfig,
+}: {
+  defs: HooksConfig["hooks"][string];
+  converterConfig: ToolHooksConverterConfig;
+}): Array<Record<string, unknown>> {
+  const hooks: Array<Record<string, unknown>> = [];
+  for (const def of defs) {
+    const hookType = def.type ?? "command";
+    if (converterConfig.supportedHookTypes && !converterConfig.supportedHookTypes.has(hookType)) {
+      continue;
+    }
+    const command = applyCommandPrefix({ def, converterConfig });
+    hooks.push({
+      // Spread the boolean passthrough fields first so the explicitly-handled
+      // core fields below always win: a misconfigured `tool` name (e.g. mapping
+      // onto "type"/"command") can never silently shadow them.
+      ...emitBooleanPassthroughFields({ def, converterConfig }),
+      type: hookType,
+      ...(command !== undefined && command !== null && { command }),
+      ...(def.timeout !== undefined && def.timeout !== null && { timeout: def.timeout }),
+      ...(def.prompt !== undefined && def.prompt !== null && { prompt: def.prompt }),
+      ...(converterConfig.passthroughFields?.includes("name") &&
+        def.name !== undefined &&
+        def.name !== null && { name: def.name }),
+      ...(converterConfig.passthroughFields?.includes("description") &&
+        def.description !== undefined &&
+        def.description !== null && { description: def.description }),
+    });
+  }
+  return hooks;
+}
 
 /**
  * Convert canonical hooks config to tool-specific format (shared by Claude and Factory Droid).
@@ -40,57 +202,40 @@ export function canonicalToToolHooks({
   config,
   toolOverrideHooks,
   converterConfig,
+  logger,
 }: {
   config: HooksConfig;
   toolOverrideHooks: HooksConfig["hooks"] | undefined;
   converterConfig: ToolHooksConverterConfig;
+  logger?: Logger;
 }): Record<string, unknown[]> {
-  const supported: Set<string> = new Set(converterConfig.supportedEvents);
-  const sharedHooks: HooksConfig["hooks"] = {};
-  for (const [event, defs] of Object.entries(config.hooks)) {
-    if (supported.has(event)) {
-      sharedHooks[event] = defs;
-    }
-  }
-  const effectiveHooks: HooksConfig["hooks"] = {
-    ...sharedHooks,
-    ...toolOverrideHooks,
-  };
+  const effectiveHooks = buildEffectiveHooks({
+    config,
+    toolOverrideHooks,
+    supportedEvents: converterConfig.supportedEvents,
+  });
   const result: Record<string, unknown[]> = {};
   for (const [eventName, definitions] of Object.entries(effectiveHooks)) {
     const toolEventName = converterConfig.canonicalToToolEventNames[eventName] ?? eventName;
-    const byMatcher = new Map<string, HooksConfig["hooks"][string]>();
-    for (const def of definitions) {
-      const key = def.matcher ?? "";
-      const list = byMatcher.get(key);
-      if (list) list.push(def);
-      else byMatcher.set(key, [def]);
-    }
+    const byMatcher = groupDefinitionsByMatcher(definitions);
     const entries: unknown[] = [];
+    const isNoMatcherEvent = converterConfig.noMatcherEvents?.has(eventName) ?? false;
     for (const [matcherKey, defs] of byMatcher) {
-      const hooks = defs.map((def) => {
-        const commandText = def.command;
-        const trimmedCommand =
-          typeof commandText === "string" ? commandText.trimStart() : undefined;
-        const shouldPrefix =
-          typeof trimmedCommand === "string" &&
-          !trimmedCommand.startsWith("$") &&
-          (!converterConfig.prefixDotRelativeCommandsOnly || trimmedCommand.startsWith("."));
-
-        const command =
-          shouldPrefix && typeof trimmedCommand === "string"
-            ? `${converterConfig.projectDirVar}/${trimmedCommand.replace(/^\.\//, "")}`
-            : def.command;
-        return {
-          type: def.type ?? "command",
-          ...(command !== undefined && command !== null && { command }),
-          ...(def.timeout !== undefined && def.timeout !== null && { timeout: def.timeout }),
-          ...(def.prompt !== undefined && def.prompt !== null && { prompt: def.prompt }),
-        };
-      });
-      entries.push(matcherKey ? { matcher: matcherKey, hooks } : { hooks });
+      if (isNoMatcherEvent && matcherKey) {
+        logger?.warn(
+          `matcher "${matcherKey}" on "${eventName}" hook will be ignored — this event does not support matchers`,
+        );
+      }
+      const hooks = buildToolHooks({ defs, converterConfig });
+      if (hooks.length === 0) {
+        continue;
+      }
+      const includeMatcher = matcherKey && !isNoMatcherEvent;
+      entries.push(includeMatcher ? { matcher: matcherKey, hooks } : { hooks });
     }
-    result[toolEventName] = entries;
+    if (entries.length > 0) {
+      result[toolEventName] = entries;
+    }
   }
   return result;
 }
@@ -98,7 +243,84 @@ export function canonicalToToolHooks({
 /**
  * Convert tool-specific hooks back to canonical format (shared by Claude and Factory Droid).
  * Reverses event name mapping and strips project directory variable prefix from commands.
+ *
+ * Note: This function does not strip matchers for noMatcherEvents. Tools themselves never produce
+ * matchers on these events, so stripping is unnecessary on import. If a manually edited config
+ * includes a matcher on such an event, it will be preserved in canonical format but dropped
+ * on the next export (with a warning).
  */
+/**
+ * Strip the project directory variable prefix from a tool command string,
+ * converting it back to a `./`-relative command.
+ */
+function stripCommandPrefix({
+  command,
+  converterConfig,
+}: {
+  command: unknown;
+  converterConfig: ToolHooksConverterConfig;
+}): string | undefined {
+  const cmd = typeof command === "string" ? command : undefined;
+  if (converterConfig.projectDirVar === "" || typeof cmd !== "string") {
+    return cmd;
+  }
+  const quotedPrefix = `"${converterConfig.projectDirVar}"/`;
+  if (cmd.startsWith(quotedPrefix)) {
+    return `./${cmd.slice(quotedPrefix.length)}`;
+  }
+  if (cmd.includes(`${converterConfig.projectDirVar}/`)) {
+    const escapedVar = converterConfig.projectDirVar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return cmd.replace(new RegExp(`^${escapedVar}\\/?`), "./");
+  }
+  return cmd;
+}
+
+/**
+ * Convert a single tool hook record into a canonical hook definition.
+ */
+function toolHookToCanonical({
+  h,
+  rawEntry,
+  converterConfig,
+}: {
+  h: Record<string, unknown>;
+  rawEntry: ToolMatcherEntry;
+  converterConfig: ToolHooksConverterConfig;
+}): HooksConfig["hooks"][string][number] {
+  const command = stripCommandPrefix({ command: h.command, converterConfig });
+  const hookType = h.type === "command" || h.type === "prompt" ? h.type : "command";
+  const timeout = typeof h.timeout === "number" ? h.timeout : undefined;
+  const prompt = typeof h.prompt === "string" ? h.prompt : undefined;
+  return {
+    type: hookType,
+    ...(command !== undefined && command !== null && { command }),
+    ...(timeout !== undefined && timeout !== null && { timeout }),
+    ...(prompt !== undefined && prompt !== null && { prompt }),
+    ...(converterConfig.passthroughFields?.includes("name") &&
+      typeof h.name === "string" && { name: h.name }),
+    ...(converterConfig.passthroughFields?.includes("description") &&
+      typeof h.description === "string" && { description: h.description }),
+    ...importBooleanPassthroughFields({ h, converterConfig }),
+    ...(rawEntry.matcher !== undefined &&
+      rawEntry.matcher !== null &&
+      rawEntry.matcher !== "" && { matcher: rawEntry.matcher }),
+  };
+}
+
+/**
+ * Convert a single tool matcher entry into canonical hook definitions.
+ */
+function toolMatcherEntryToCanonical({
+  rawEntry,
+  converterConfig,
+}: {
+  rawEntry: ToolMatcherEntry;
+  converterConfig: ToolHooksConverterConfig;
+}): HooksConfig["hooks"][string] {
+  const hookDefs = rawEntry.hooks ?? [];
+  return hookDefs.map((h) => toolHookToCanonical({ h, rawEntry, converterConfig }));
+}
+
 export function toolHooksToCanonical({
   hooks,
   converterConfig,
@@ -116,31 +338,7 @@ export function toolHooksToCanonical({
     const defs: HooksConfig["hooks"][string] = [];
     for (const rawEntry of matcherEntries) {
       if (!isToolMatcherEntry(rawEntry)) continue;
-      const hookDefs = rawEntry.hooks ?? [];
-      for (const h of hookDefs) {
-        const cmd = typeof h.command === "string" ? h.command : undefined;
-        const command =
-          typeof cmd === "string" && cmd.includes(`${converterConfig.projectDirVar}/`)
-            ? cmd.replace(
-                new RegExp(
-                  `^${converterConfig.projectDirVar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?`,
-                ),
-                "./",
-              )
-            : cmd;
-        const hookType = h.type === "command" || h.type === "prompt" ? h.type : "command";
-        const timeout = typeof h.timeout === "number" ? h.timeout : undefined;
-        const prompt = typeof h.prompt === "string" ? h.prompt : undefined;
-        defs.push({
-          type: hookType,
-          ...(command !== undefined && command !== null && { command }),
-          ...(timeout !== undefined && timeout !== null && { timeout }),
-          ...(prompt !== undefined && prompt !== null && { prompt }),
-          ...(rawEntry.matcher !== undefined &&
-            rawEntry.matcher !== null &&
-            rawEntry.matcher !== "" && { matcher: rawEntry.matcher }),
-        });
-      }
+      defs.push(...toolMatcherEntryToCanonical({ rawEntry, converterConfig }));
     }
     if (defs.length > 0) {
       canonical[eventName] = defs;

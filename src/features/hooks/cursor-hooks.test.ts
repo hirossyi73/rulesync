@@ -27,6 +27,13 @@ describe("CursorHooks", () => {
       const paths = CursorHooks.getSettablePaths();
       expect(paths).toEqual({ relativeDirPath: ".cursor", relativeFilePath: "hooks.json" });
     });
+
+    it("should return the same .cursor/hooks.json shape in global mode (resolved relative to home)", () => {
+      // Cursor uses identical filename for project and global — only the
+      // resolution root (project vs. home) differs, which is the harness's job.
+      const paths = CursorHooks.getSettablePaths({ global: true });
+      expect(paths).toEqual({ relativeDirPath: ".cursor", relativeFilePath: "hooks.json" });
+    });
   });
 
   describe("fromRulesyncHooks", () => {
@@ -40,7 +47,7 @@ describe("CursorHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -48,7 +55,7 @@ describe("CursorHooks", () => {
       });
 
       const cursorHooks = CursorHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -58,6 +65,34 @@ describe("CursorHooks", () => {
       expect(parsed.hooks.sessionStart).toHaveLength(1);
       expect(parsed.hooks.stop).toHaveLength(1);
       expect(parsed.hooks.notification).toBeUndefined();
+    });
+
+    it("should emit the workspaceOpen event and pass through failClosed", () => {
+      const config = {
+        version: 1,
+        hooks: {
+          workspaceOpen: [{ command: ".cursor/hooks/on-open.sh" }],
+          beforeShellExecution: [{ command: ".cursor/hooks/guard.sh", failClosed: true }],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const parsed = JSON.parse(
+        CursorHooks.fromRulesyncHooks({
+          outputRoot: testDir,
+          rulesyncHooks,
+          validate: false,
+        }).getFileContent(),
+      );
+      expect(parsed.hooks.workspaceOpen).toHaveLength(1);
+      expect(parsed.hooks.workspaceOpen[0].command).toBe(".cursor/hooks/on-open.sh");
+      expect(parsed.hooks.beforeShellExecution[0].failClosed).toBe(true);
     });
 
     it("should merge config.cursor.hooks on top of shared hooks", () => {
@@ -74,7 +109,7 @@ describe("CursorHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -82,7 +117,7 @@ describe("CursorHooks", () => {
       });
 
       const cursorHooks = CursorHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -97,7 +132,7 @@ describe("CursorHooks", () => {
     it("should preserve version from config", () => {
       const config = { version: 2, hooks: { sessionStart: [] } };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -105,7 +140,7 @@ describe("CursorHooks", () => {
       });
 
       const cursorHooks = CursorHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -119,7 +154,7 @@ describe("CursorHooks", () => {
   describe("toRulesyncHooks", () => {
     it("should convert Cursor hooks JSON to canonical rulesync format", () => {
       const cursorHooks = new CursorHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".cursor",
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify({
@@ -150,7 +185,7 @@ describe("CursorHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -158,14 +193,14 @@ describe("CursorHooks", () => {
       });
 
       const cursorHooks = CursorHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
       await ensureDir(join(testDir, ".cursor"));
       await writeFileContent(cursorHooks.getFilePath(), cursorHooks.getFileContent());
 
-      const loaded = await CursorHooks.fromFile({ baseDir: testDir, validate: false });
+      const loaded = await CursorHooks.fromFile({ outputRoot: testDir, validate: false });
       const backToRulesync = loaded.toRulesyncHooks();
       const json = backToRulesync.getJson();
       expect(json.hooks.sessionStart).toHaveLength(1);
@@ -183,7 +218,7 @@ describe("CursorHooks", () => {
         JSON.stringify({ version: 1, hooks: { sessionStart: [] } }),
       );
 
-      const cursorHooks = await CursorHooks.fromFile({ baseDir: testDir, validate: false });
+      const cursorHooks = await CursorHooks.fromFile({ outputRoot: testDir, validate: false });
       expect(cursorHooks).toBeInstanceOf(CursorHooks);
       const content = cursorHooks.getFileContent();
       const parsed = JSON.parse(content);
@@ -195,7 +230,7 @@ describe("CursorHooks", () => {
   describe("forDeletion", () => {
     it("should return CursorHooks instance with empty hooks for deletion path", () => {
       const hooks = CursorHooks.forDeletion({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".cursor",
         relativeFilePath: "hooks.json",
       });

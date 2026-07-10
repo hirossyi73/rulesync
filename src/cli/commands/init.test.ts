@@ -21,13 +21,12 @@ import { RulesyncMcp } from "../../features/mcp/rulesync-mcp.js";
 import { RulesyncRule } from "../../features/rules/rulesync-rule.js";
 import { RulesyncSkill } from "../../features/skills/rulesync-skill.js";
 import { RulesyncSubagent } from "../../features/subagents/rulesync-subagent.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { ensureDir, fileExists, writeFileContent } from "../../utils/file.js";
-import { logger } from "../../utils/logger.js";
 import { initCommand } from "./init.js";
 
 // Mock dependencies
 vi.mock("../../utils/file.js");
-vi.mock("../../utils/logger.js");
 vi.mock("../../features/commands/rulesync-command.js");
 vi.mock("../../features/hooks/rulesync-hooks.js");
 vi.mock("../../features/ignore/rulesync-ignore.js");
@@ -37,11 +36,10 @@ vi.mock("../../features/skills/rulesync-skill.js");
 vi.mock("../../features/subagents/rulesync-subagent.js");
 
 describe("initCommand", () => {
+  let mockLogger: ReturnType<typeof createMockLogger>;
+
   beforeEach(() => {
-    // Setup logger mocks
-    vi.mocked(logger.info).mockImplementation(() => {});
-    vi.mocked(logger.debug).mockImplementation(() => {});
-    vi.mocked(logger.success).mockImplementation(() => {});
+    mockLogger = createMockLogger();
 
     // Setup file utility mocks
     vi.mocked(ensureDir).mockResolvedValue(undefined);
@@ -93,21 +91,21 @@ describe("initCommand", () => {
 
   describe("basic functionality", () => {
     it("should initialize rulesync successfully", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
-      expect(logger.debug).toHaveBeenCalledWith("Initializing rulesync...");
-      expect(logger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
-      expect(logger.info).toHaveBeenCalledWith("Next steps:");
-      expect(logger.info).toHaveBeenCalledWith(
+      expect(mockLogger.debug).toHaveBeenCalledWith("Initializing rulesync...");
+      expect(mockLogger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
+      expect(mockLogger.info).toHaveBeenCalledWith("Next steps:");
+      expect(mockLogger.info).toHaveBeenCalledWith(
         `1. Edit ${RULESYNC_RELATIVE_DIR_PATH}/**/*.md, ${RULESYNC_RELATIVE_DIR_PATH}/skills/*/${SKILL_FILE_NAME}, ${RULESYNC_RELATIVE_DIR_PATH}/mcp.json, ${RULESYNC_HOOKS_RELATIVE_FILE_PATH} and ${RULESYNC_AIIGNORE_RELATIVE_FILE_PATH}`,
       );
-      expect(logger.info).toHaveBeenCalledWith(
+      expect(mockLogger.info).toHaveBeenCalledWith(
         "2. Run 'rulesync generate' to create configuration files",
       );
     });
 
     it("should create required directories", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RULES_RELATIVE_DIR_PATH);
@@ -123,7 +121,7 @@ describe("initCommand", () => {
     });
 
     it("should call createSampleFiles", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
       // Verify that sample file creation was called
       const expectedFilePath = join(RULESYNC_RULES_RELATIVE_DIR_PATH, RULESYNC_OVERVIEW_FILE_NAME);
@@ -136,7 +134,7 @@ describe("initCommand", () => {
     it("should create overview.md sample file when it doesn't exist", async () => {
       vi.mocked(fileExists).mockResolvedValue(false);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedFilePath = join(RULESYNC_RULES_RELATIVE_DIR_PATH, RULESYNC_OVERVIEW_FILE_NAME);
       expect(fileExists).toHaveBeenCalledWith(expectedFilePath);
@@ -144,22 +142,22 @@ describe("initCommand", () => {
         expectedFilePath,
         expect.stringContaining("# Project Overview"),
       );
-      expect(logger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
+      expect(mockLogger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
     });
 
     it("should skip creating overview.md when it already exists", async () => {
       const expectedFilePath = join(RULESYNC_RULES_RELATIVE_DIR_PATH, RULESYNC_OVERVIEW_FILE_NAME);
       vi.mocked(fileExists).mockResolvedValue(true);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       expect(fileExists).toHaveBeenCalledWith(expectedFilePath);
       expect(writeFileContent).not.toHaveBeenCalled();
-      expect(logger.info).toHaveBeenCalledWith(`Skipped ${expectedFilePath} (already exists)`);
+      expect(mockLogger.info).toHaveBeenCalledWith(`Skipped ${expectedFilePath} (already exists)`);
     });
 
     it("should create sample file with correct content structure", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
       const writeCall = vi.mocked(writeFileContent).mock.calls[0];
       expect(writeCall).toBeDefined();
@@ -187,7 +185,7 @@ describe("initCommand", () => {
     });
 
     it("should create sample file with proper formatting", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
       const writeCall = vi.mocked(writeFileContent).mock.calls[0];
       expect(writeCall).toBeDefined();
@@ -202,7 +200,7 @@ describe("initCommand", () => {
     it("should create skill sample file when it doesn't exist", async () => {
       vi.mocked(fileExists).mockResolvedValue(false);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedFilePath = join(
         RULESYNC_SKILLS_RELATIVE_DIR_PATH,
@@ -214,7 +212,7 @@ describe("initCommand", () => {
         expectedFilePath,
         expect.stringContaining("name: project-context"),
       );
-      expect(logger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
+      expect(mockLogger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
     });
   });
 
@@ -222,11 +220,11 @@ describe("initCommand", () => {
     it("should handle ensureDir errors for main directory", async () => {
       vi.mocked(ensureDir).mockRejectedValueOnce(new Error("Permission denied"));
 
-      await expect(initCommand()).rejects.toThrow("Permission denied");
+      await expect(initCommand(mockLogger)).rejects.toThrow("Permission denied");
 
-      expect(logger.debug).toHaveBeenCalledWith("Initializing rulesync...");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Initializing rulesync...");
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
-      expect(logger.success).not.toHaveBeenCalled();
+      expect(mockLogger.success).not.toHaveBeenCalled();
     });
 
     it("should handle ensureDir errors for rules directory", async () => {
@@ -234,7 +232,7 @@ describe("initCommand", () => {
         .mockResolvedValueOnce(undefined) // First call succeeds
         .mockRejectedValueOnce(new Error("Disk full")); // Second call fails
 
-      await expect(initCommand()).rejects.toThrow("Disk full");
+      await expect(initCommand(mockLogger)).rejects.toThrow("Disk full");
 
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RULES_RELATIVE_DIR_PATH);
@@ -243,20 +241,20 @@ describe("initCommand", () => {
     it("should handle fileExists errors", async () => {
       vi.mocked(fileExists).mockRejectedValue(new Error("File system error"));
 
-      await expect(initCommand()).rejects.toThrow("File system error");
+      await expect(initCommand(mockLogger)).rejects.toThrow("File system error");
 
-      expect(logger.debug).toHaveBeenCalledWith("Initializing rulesync...");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Initializing rulesync...");
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
     });
 
     it("should handle writeFileContent errors", async () => {
       vi.mocked(writeFileContent).mockRejectedValue(new Error("Write permission denied"));
 
-      await expect(initCommand()).rejects.toThrow("Write permission denied");
+      await expect(initCommand(mockLogger)).rejects.toThrow("Write permission denied");
 
-      expect(logger.debug).toHaveBeenCalledWith("Initializing rulesync...");
+      expect(mockLogger.debug).toHaveBeenCalledWith("Initializing rulesync...");
       expect(writeFileContent).toHaveBeenCalled();
-      expect(logger.success).not.toHaveBeenCalledWith(expect.stringContaining("Created"));
+      expect(mockLogger.success).not.toHaveBeenCalledWith(expect.stringContaining("Created"));
     });
 
     it("should handle RulesyncCommand.getSettablePaths errors", async () => {
@@ -264,7 +262,7 @@ describe("initCommand", () => {
         throw new Error("Command configuration error");
       });
 
-      await expect(initCommand()).rejects.toThrow("Command configuration error");
+      await expect(initCommand(mockLogger)).rejects.toThrow("Command configuration error");
 
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
     });
@@ -276,7 +274,7 @@ describe("initCommand", () => {
       vi.mocked(ensureDir).mockResolvedValue(undefined);
       vi.mocked(fileExists).mockResolvedValue(false);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RELATIVE_DIR_PATH);
       expect(ensureDir).toHaveBeenCalledWith(RULESYNC_RULES_RELATIVE_DIR_PATH);
@@ -286,16 +284,16 @@ describe("initCommand", () => {
       expect(ensureDir).toHaveBeenCalledWith(
         join(RULESYNC_SKILLS_RELATIVE_DIR_PATH, "project-context"),
       );
-      expect(logger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
+      expect(mockLogger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
     });
 
     it("should complete initialization even when sample file already exists", async () => {
       vi.mocked(fileExists).mockResolvedValue(true);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
-      expect(logger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
-      expect(logger.info).toHaveBeenCalledWith("Next steps:");
+      expect(mockLogger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
+      expect(mockLogger.info).toHaveBeenCalledWith("Next steps:");
       expect(writeFileContent).not.toHaveBeenCalled();
     });
 
@@ -305,7 +303,7 @@ describe("initCommand", () => {
         ensureDirCalls.push(path);
       });
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       expect(ensureDirCalls).toEqual([
         RULESYNC_RELATIVE_DIR_PATH,
@@ -322,26 +320,26 @@ describe("initCommand", () => {
 
   describe("logging behavior", () => {
     it("should log initialization start message first", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
-      const loggerDebugCalls = vi.mocked(logger.debug).mock.calls;
+      const loggerDebugCalls = vi.mocked(mockLogger.debug).mock.calls;
       expect(loggerDebugCalls[0]?.[0]).toBe("Initializing rulesync...");
     });
 
     it("should log success message after completion", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
-      expect(logger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
+      expect(mockLogger.success).toHaveBeenCalledWith("rulesync initialized successfully!");
     });
 
     it("should log next steps instructions", async () => {
-      await initCommand();
+      await initCommand(mockLogger);
 
-      expect(logger.info).toHaveBeenCalledWith("Next steps:");
-      expect(logger.info).toHaveBeenCalledWith(
+      expect(mockLogger.info).toHaveBeenCalledWith("Next steps:");
+      expect(mockLogger.info).toHaveBeenCalledWith(
         `1. Edit ${RULESYNC_RELATIVE_DIR_PATH}/**/*.md, ${RULESYNC_RELATIVE_DIR_PATH}/skills/*/${SKILL_FILE_NAME}, ${RULESYNC_RELATIVE_DIR_PATH}/mcp.json, ${RULESYNC_HOOKS_RELATIVE_FILE_PATH} and ${RULESYNC_AIIGNORE_RELATIVE_FILE_PATH}`,
       );
-      expect(logger.info).toHaveBeenCalledWith(
+      expect(mockLogger.info).toHaveBeenCalledWith(
         "2. Run 'rulesync generate' to create configuration files",
       );
     });
@@ -349,19 +347,19 @@ describe("initCommand", () => {
     it("should log sample file creation success", async () => {
       vi.mocked(fileExists).mockResolvedValue(false);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedFilePath = join(RULESYNC_RULES_RELATIVE_DIR_PATH, RULESYNC_OVERVIEW_FILE_NAME);
-      expect(logger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
+      expect(mockLogger.success).toHaveBeenCalledWith(`Created ${expectedFilePath}`);
     });
 
     it("should log sample file skip message", async () => {
       vi.mocked(fileExists).mockResolvedValue(true);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedFilePath = join(RULESYNC_RULES_RELATIVE_DIR_PATH, RULESYNC_OVERVIEW_FILE_NAME);
-      expect(logger.info).toHaveBeenCalledWith(`Skipped ${expectedFilePath} (already exists)`);
+      expect(mockLogger.info).toHaveBeenCalledWith(`Skipped ${expectedFilePath} (already exists)`);
     });
   });
 
@@ -369,23 +367,23 @@ describe("initCommand", () => {
     it("should create .aiignore in .rulesync when it doesn't exist", async () => {
       // by default in beforeEach, fileExists resolves to false
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedIgnoreFilePath = join(RULESYNC_RELATIVE_DIR_PATH, RULESYNC_AIIGNORE_FILE_NAME);
 
       expect(writeFileContent).toHaveBeenCalledWith(expectedIgnoreFilePath, expect.any(String));
-      expect(logger.success).toHaveBeenCalledWith(`Created ${expectedIgnoreFilePath}`);
+      expect(mockLogger.success).toHaveBeenCalledWith(`Created ${expectedIgnoreFilePath}`);
     });
 
     it("should skip creating .aiignore when it already exists", async () => {
       // Make every file appear to exist to trigger skip path
       vi.mocked(fileExists).mockResolvedValue(true);
 
-      await initCommand();
+      await initCommand(mockLogger);
 
       const expectedIgnoreFilePath = join(RULESYNC_RELATIVE_DIR_PATH, RULESYNC_AIIGNORE_FILE_NAME);
 
-      expect(logger.info).toHaveBeenCalledWith(
+      expect(mockLogger.info).toHaveBeenCalledWith(
         `Skipped ${expectedIgnoreFilePath} (already exists)`,
       );
       // Ensure we did not attempt to write the .aiignore file

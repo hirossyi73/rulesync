@@ -1,12 +1,21 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { kebabCase } from "es-toolkit";
 import { globbySync } from "globby";
 
 import { formatError } from "./error.js";
-import { logger } from "./logger.js";
 import { isEnvTest } from "./vitest.js";
 
 export async function ensureDir(dirPath: string): Promise<void> {
@@ -28,6 +37,16 @@ export async function readOrInitializeFileContent(
     await writeFileContent(filePath, initialContent);
     return initialContent;
   }
+}
+
+/**
+ * Converts OS-native path separators to POSIX forward slashes.
+ * Use this instead of `path.posix.join` when input segments may already
+ * contain backslashes (e.g., on Windows), because `path.posix.join` does
+ * not normalize backslashes.
+ */
+export function toPosixPath(p: string): string {
+  return p.replace(/\\/g, "/");
 }
 
 export function checkPathTraversal({
@@ -54,19 +73,19 @@ export function checkPathTraversal({
  * Resolves a path relative to a base directory, handling both absolute and relative paths
  * Includes protection against path traversal attacks
  */
-export function resolvePath(relativePath: string, baseDir?: string): string {
-  if (!baseDir) return relativePath;
+export function resolvePath(relativePath: string, outputRoot?: string): string {
+  if (!outputRoot) return relativePath;
 
-  checkPathTraversal({ relativePath, intendedRootDir: baseDir });
+  checkPathTraversal({ relativePath, intendedRootDir: outputRoot });
 
-  return resolve(baseDir, relativePath);
+  return resolve(outputRoot, relativePath);
 }
 
 /**
  * Creates a path resolver function bound to a specific base directory
  */
-export function createPathResolver(baseDir?: string) {
-  return (relativePath: string) => resolvePath(relativePath, baseDir);
+export function createPathResolver(outputRoot?: string) {
+  return (relativePath: string) => resolvePath(relativePath, outputRoot);
 }
 
 /**
@@ -110,7 +129,6 @@ export async function directoryExists(dirPath: string): Promise<boolean> {
 }
 
 export async function readFileContent(filepath: string): Promise<string> {
-  logger.debug(`Reading file: ${filepath}`);
   return readFile(filepath, "utf-8");
 }
 
@@ -125,7 +143,6 @@ export async function readFileContentOrNull(filepath: string): Promise<string | 
 }
 
 export async function readFileBuffer(filepath: string): Promise<Buffer> {
-  logger.debug(`Reading file buffer: ${filepath}`);
   return readFile(filepath);
 }
 
@@ -142,15 +159,11 @@ export function addTrailingNewline(content: string): string {
 }
 
 export async function writeFileContent(filepath: string, content: string): Promise<void> {
-  logger.debug(`Writing file: ${filepath}`);
-
   await ensureDir(dirname(filepath));
   await writeFile(filepath, content, "utf-8");
 }
 
 export async function writeFileBuffer(filepath: string, buffer: Buffer): Promise<void> {
-  logger.debug(`Writing file buffer: ${filepath}`);
-
   await ensureDir(dirname(filepath));
   await writeFile(filepath, buffer);
 }
@@ -216,13 +229,41 @@ export async function findFilesByGlobs(
   const normalizedGlobs = Array.isArray(globs)
     ? globs.map((g) => g.replaceAll("\\", "/"))
     : globs.replaceAll("\\", "/");
+  // followSymbolicLinks: true lets callers use symlinks to share skills/rules across
+  // directories without duplication (see issue #1707). Callers operate on user-specified
+  // local trees that are inside the trust boundary, so symlinks are honored — including
+  // ones whose targets resolve outside the glob root. This is an intentional trade-off:
+  // enforcing realpath containment against a single root would break the #1707 use case of
+  // sharing files that live elsewhere in the same repository. Untrusted remote content is a
+  // separate code path: git-client.ts (`walkDirectory`) skips symlinks entirely as a
+  // security hardening for fetched repositories (commit 51bf0443), so this relaxed handling
+  // never applies to remote input.
   const results = globbySync(normalizedGlobs, {
     absolute: true,
-    followSymbolicLinks: false,
+    followSymbolicLinks: true,
     ...globbyOptions,
   });
-  // Sort for consistent ordering across different glob implementations
-  return results.toSorted();
+  // Deduplicate by real path so that directory symlink cycles (which globby follows up to
+  // the kernel ELOOP limit, ~40 levels) do not yield ~40x duplicated entries that would be
+  // read and re-emitted. Keep the first path per real file in sorted order for determinism.
+  const seenRealPaths = new Set<string>();
+  const deduped: string[] = [];
+  for (const result of results.toSorted()) {
+    let realResult: string;
+    try {
+      realResult = await realpath(result);
+    } catch {
+      // realpath can fail on a broken link or race; fall back to the literal path so the
+      // entry is still considered (and still deduplicated against identical literals).
+      realResult = result;
+    }
+    if (seenRealPaths.has(realResult)) {
+      continue;
+    }
+    seenRealPaths.add(realResult);
+    deduped.push(result);
+  }
+  return deduped;
 }
 
 export async function findRuleFiles(aiRulesDir: string): Promise<string[]> {
@@ -234,7 +275,6 @@ export async function removeDirectory(dirPath: string): Promise<void> {
   // Safety check: prevent deletion of dangerous paths
   const dangerousPaths = [".", "/", "~", "src", "node_modules"];
   if (dangerousPaths.includes(dirPath) || dirPath === "") {
-    logger.warn(`Skipping deletion of dangerous path: ${dirPath}`);
     return;
   }
 
@@ -242,19 +282,18 @@ export async function removeDirectory(dirPath: string): Promise<void> {
     if (await fileExists(dirPath)) {
       await rm(dirPath, { recursive: true, force: true });
     }
-  } catch (error) {
-    logger.warn(`Failed to remove directory ${dirPath}:`, error);
+  } catch {
+    // Best-effort removal; silently ignore errors
   }
 }
 
 export async function removeFile(filepath: string): Promise<void> {
-  logger.debug(`Removing file: ${filepath}`);
   try {
     if (await fileExists(filepath)) {
       await rm(filepath);
     }
-  } catch (error) {
-    logger.warn(`Failed to remove file ${filepath}:`, error);
+  } catch {
+    // Best-effort removal; silently ignore errors
   }
 }
 
@@ -274,16 +313,80 @@ export function getHomeDirectory(): string {
 }
 
 /**
- * Validates that a baseDir is safe to use
- * @throws {Error} if the baseDir is dangerous or contains path traversal
+ * Validates that a outputRoot is safe to use as the source/output root.
+ *
+ * Contract:
+ * - Rejects empty strings.
+ * - For absolute paths: requires the path to already be normalized (i.e.
+ *   `resolve(outputRoot) === outputRoot`). This rejects sneaky inputs like
+ *   `/foo/../bar` and forces callers to pass an explicit, normalized intent.
+ *   Also rejects the filesystem root (`/` on POSIX, `C:\\` etc. on Windows)
+ *   because that is almost certainly a misconfiguration, not a real source
+ *   directory.
+ * - For relative paths: applies `checkPathTraversal` against the current
+ *   working directory. Benign no-op shortcuts like `.`, `./`, and `.\\` are
+ *   accepted because they don't escape cwd; resolver paths typically pre-
+ *   resolve to absolute first, so the relative branch mostly serves direct
+ *   programmatic callers.
+ *
+ * Note: callers that need to validate a path while in a different "intended
+ * root" should resolve it to absolute first and then pass it here, or use
+ * `checkPathTraversal` directly with the appropriate `intendedRootDir`.
+ *
+ * @throws {Error} if the outputRoot is dangerous, unnormalized, or the
+ * filesystem root.
  */
-export function validateBaseDir(baseDir: string): void {
+export function validateOutputRoot(outputRoot: string): void {
   // Reject empty strings
-  if (baseDir.trim() === "") {
-    throw new Error("baseDir cannot be an empty string");
+  if (outputRoot.trim() === "") {
+    throw new Error("outputRoot cannot be an empty string");
   }
 
-  checkPathTraversal({ relativePath: baseDir, intendedRootDir: process.cwd() });
+  if (isAbsolute(outputRoot)) {
+    // Defense-in-depth: split on path separators and reject any `..` segment.
+    // The separator set is platform-aware because POSIX paths can legitimately
+    // contain a literal backslash inside a filename component (e.g.
+    // `/srv/foo\bar`), and treating `\` as a separator there would falsely
+    // split such filenames. On Windows, both `/` and `\` are valid path
+    // separators (Windows `resolve()` ignores `/` in some legacy paths), so
+    // we keep the dual-separator split there to catch cross-platform inputs
+    // like `C:/foo\..\bar` that would otherwise slip past the
+    // normalized-equality check below.
+    const separatorRegex = process.platform === "win32" ? /[/\\]/ : /\//;
+    const segments = outputRoot.split(separatorRegex);
+    if (segments.includes("..")) {
+      throw new Error(`Path traversal detected: ${outputRoot}`);
+    }
+
+    // Reject unnormalized absolute paths. After `resolve(outputRoot)` collapses
+    // any `.`/`..` segments and normalizes separators, the result must equal
+    // the input — otherwise the caller passed a path that hides traversal
+    // intent inside an absolute prefix (e.g. `/foo/./bar` or `/foo//bar`).
+    const normalized = resolve(outputRoot);
+    if (normalized !== outputRoot) {
+      throw new Error(
+        `outputRoot must be a normalized absolute path: ${outputRoot} (normalized: ${normalized})`,
+      );
+    }
+
+    // Reject the filesystem root explicitly. `dirname(root) === root` is the
+    // standard cross-platform way to detect the root of the volume.
+    if (dirname(normalized) === normalized) {
+      throw new Error(
+        `outputRoot must not be the filesystem root: ${outputRoot}. ` +
+          `Pass a specific project directory instead.`,
+      );
+    }
+    return;
+  }
+
+  // Relative-path branch. `checkPathTraversal` rejects values that escape
+  // `process.cwd()`, while allowing benign no-op shortcuts like `.` and `./`.
+  // Those shortcuts are functionally equivalent to omitting the option and
+  // have always been accepted by the resolver path (which `resolve()`s before
+  // calling here), so we accept them in direct programmatic callers too to
+  // avoid an accidental breaking change.
+  checkPathTraversal({ relativePath: outputRoot, intendedRootDir: process.cwd() });
 }
 
 /**
@@ -329,8 +432,7 @@ export async function createTempDirectory(prefix = "rulesync-fetch-"): Promise<s
 export async function removeTempDirectory(tempDir: string): Promise<void> {
   try {
     await rm(tempDir, { recursive: true, force: true });
-    logger.debug(`Removed temp directory: ${tempDir}`);
   } catch {
-    logger.debug(`Failed to clean up temp directory: ${tempDir}`);
+    // Best-effort cleanup; silently ignore errors
   }
 }

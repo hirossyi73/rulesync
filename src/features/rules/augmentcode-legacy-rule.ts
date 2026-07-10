@@ -1,5 +1,9 @@
 import { join } from "node:path";
 
+import {
+  AUGMENTCODE_DIR,
+  AUGMENTCODE_LEGACY_RULE_FILE_NAME,
+} from "../../constants/augmentcode-paths.js";
 import { RULESYNC_RULES_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
@@ -9,12 +13,9 @@ import {
   ToolRuleForDeletionParams,
   ToolRuleFromFileParams,
   ToolRuleFromRulesyncRuleParams,
-  ToolRuleParams,
   ToolRuleSettablePaths,
   buildToolPath,
 } from "./tool-rule.js";
-
-export type AugmentcodeLegacyRuleParams = ToolRuleParams;
 
 export type AugmentcodeLegacyRuleSettablePaths = ToolRuleSettablePaths & {
   root: {
@@ -35,7 +36,7 @@ export class AugmentcodeLegacyRule extends ToolRule {
     };
 
     return new RulesyncRule({
-      baseDir: ".", // RulesyncRule baseDir is always the project root directory
+      outputRoot: ".", // RulesyncRule outputRoot is always the project root directory
       frontmatter: rulesyncFrontmatter,
       body: this.getFileContent(),
       relativeDirPath: RULESYNC_RULES_RELATIVE_DIR_PATH,
@@ -53,22 +54,22 @@ export class AugmentcodeLegacyRule extends ToolRule {
     return {
       root: {
         relativeDirPath: ".",
-        relativeFilePath: ".augment-guidelines",
+        relativeFilePath: AUGMENTCODE_LEGACY_RULE_FILE_NAME,
       },
       nonRoot: {
-        relativeDirPath: buildToolPath(".augment", "rules", _options.excludeToolDir),
+        relativeDirPath: buildToolPath(AUGMENTCODE_DIR, "rules", _options.excludeToolDir),
       },
     };
   }
 
   static fromRulesyncRule({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncRule,
     validate = true,
   }: ToolRuleFromRulesyncRuleParams): ToolRule {
     return new AugmentcodeLegacyRule(
       this.buildToolRuleParamsDefault({
-        baseDir,
+        outputRoot,
         rulesyncRule,
         validate,
         rootPath: this.getSettablePaths().root,
@@ -89,7 +90,7 @@ export class AugmentcodeLegacyRule extends ToolRule {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolRuleFromFileParams): Promise<AugmentcodeLegacyRule> {
@@ -99,10 +100,10 @@ export class AugmentcodeLegacyRule extends ToolRule {
     const relativePath = isRoot
       ? settablePaths.root.relativeFilePath
       : join(settablePaths.nonRoot.relativeDirPath, relativeFilePath);
-    const fileContent = await readFileContent(join(baseDir, relativePath));
+    const fileContent = await readFileContent(join(outputRoot, relativePath));
 
     return new AugmentcodeLegacyRule({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: isRoot
         ? settablePaths.root.relativeDirPath
         : settablePaths.nonRoot.relativeDirPath,
@@ -114,7 +115,7 @@ export class AugmentcodeLegacyRule extends ToolRule {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolRuleForDeletionParams): AugmentcodeLegacyRule {
@@ -122,7 +123,7 @@ export class AugmentcodeLegacyRule extends ToolRule {
     const isRoot = relativeFilePath === settablePaths.root.relativeFilePath;
 
     return new AugmentcodeLegacyRule({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

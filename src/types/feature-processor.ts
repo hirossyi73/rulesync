@@ -1,10 +1,11 @@
+import { fileContentsEquivalent } from "../utils/content-equivalence.js";
 import {
   addTrailingNewline,
   readFileContentOrNull,
   removeFile,
   writeFileContent,
 } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
+import type { Logger } from "../utils/logger.js";
 import type { WriteResult } from "../utils/result.js";
 import { AiFile } from "./ai-file.js";
 import { RulesyncFile } from "./rulesync-file.js";
@@ -12,12 +13,26 @@ import { ToolFile } from "./tool-file.js";
 import { ToolTarget } from "./tool-targets.js";
 
 export abstract class FeatureProcessor {
-  protected readonly baseDir: string;
+  protected readonly outputRoot: string;
+  protected readonly inputRoot: string;
   protected readonly dryRun: boolean;
+  protected readonly logger: Logger;
 
-  constructor({ baseDir = process.cwd(), dryRun = false }: { baseDir?: string; dryRun?: boolean }) {
-    this.baseDir = baseDir;
+  constructor({
+    outputRoot = process.cwd(),
+    inputRoot = process.cwd(),
+    dryRun = false,
+    logger,
+  }: {
+    outputRoot?: string;
+    inputRoot?: string;
+    dryRun?: boolean;
+    logger: Logger;
+  }) {
+    this.outputRoot = outputRoot;
+    this.inputRoot = inputRoot;
     this.dryRun = dryRun;
+    this.logger = logger;
   }
 
   abstract loadRulesyncFiles(): Promise<RulesyncFile[]>;
@@ -46,15 +61,27 @@ export abstract class FeatureProcessor {
     const changedPaths: string[] = [];
     for (const aiFile of aiFiles) {
       const filePath = aiFile.getFilePath();
-      const contentWithNewline = addTrailingNewline(aiFile.getFileContent());
-      const existingContent = await readFileContentOrNull(filePath);
+      const existingFileContent = await readFileContentOrNull(filePath);
 
-      if (existingContent === contentWithNewline) {
+      if (existingFileContent !== null && aiFile.shouldMergeExistingFileContent()) {
+        aiFile.setFileContent(existingFileContent);
+      }
+
+      const contentWithNewline = addTrailingNewline(aiFile.getFileContent());
+      const existingContent = existingFileContent;
+
+      if (
+        fileContentsEquivalent({
+          filePath,
+          expected: contentWithNewline,
+          existing: existingContent,
+        })
+      ) {
         continue;
       }
 
       if (this.dryRun) {
-        logger.info(`[DRY RUN] Would write: ${filePath}`);
+        this.logger.info(`[DRY RUN] Would write: ${filePath}`);
       } else {
         await writeFileContent(filePath, contentWithNewline);
       }
@@ -82,7 +109,7 @@ export abstract class FeatureProcessor {
     for (const aiFile of orphanFiles) {
       const filePath = aiFile.getFilePath();
       if (this.dryRun) {
-        logger.info(`[DRY RUN] Would delete: ${filePath}`);
+        this.logger.info(`[DRY RUN] Would delete: ${filePath}`);
       } else {
         await removeFile(filePath);
       }

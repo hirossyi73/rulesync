@@ -5,13 +5,29 @@ import { CommandsProcessor } from "../features/commands/commands-processor.js";
 import { HooksProcessor } from "../features/hooks/hooks-processor.js";
 import { IgnoreProcessor } from "../features/ignore/ignore-processor.js";
 import { McpProcessor } from "../features/mcp/mcp-processor.js";
+import { PermissionsProcessor } from "../features/permissions/permissions-processor.js";
 import { RulesProcessor } from "../features/rules/rules-processor.js";
 import { RulesyncSkill } from "../features/skills/rulesync-skill.js";
 import { SkillsProcessor } from "../features/skills/skills-processor.js";
 import { SubagentsProcessor } from "../features/subagents/subagents-processor.js";
+import { createMockLogger } from "../test-utils/mock-logger.js";
 import { fileExists, readFileContentOrNull } from "../utils/file.js";
-import { logger } from "../utils/logger.js";
-import { checkRulesyncDirExists, generate } from "./generate.js";
+import {
+  checkRulesyncDirExists,
+  generate,
+  GENERATION_STEP_GRAPH,
+  resolveExecutionOrder,
+} from "./generate.js";
+
+const logger = createMockLogger();
+
+const createMockSkillsProcessor = () => ({
+  loadToolDirsToDelete: vi.fn().mockResolvedValue([]),
+  removeAiDirs: vi.fn().mockResolvedValue(undefined),
+  loadRulesyncDirs: vi.fn().mockResolvedValue([]),
+  convertRulesyncDirsToToolDirs: vi.fn().mockResolvedValue([]),
+  writeAiDirs: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+});
 
 vi.mock("../features/rules/rules-processor.js");
 vi.mock("../features/ignore/ignore-processor.js");
@@ -20,6 +36,7 @@ vi.mock("../features/subagents/subagents-processor.js");
 vi.mock("../features/commands/commands-processor.js");
 vi.mock("../features/hooks/hooks-processor.js");
 vi.mock("../features/skills/skills-processor.js");
+vi.mock("../features/permissions/permissions-processor.js");
 vi.mock("../utils/file.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/file.js")>();
   return {
@@ -41,7 +58,7 @@ describe("checkRulesyncDirExists", () => {
   it("should return true when .rulesync directory exists", async () => {
     vi.mocked(fileExists).mockResolvedValue(true);
 
-    const result = await checkRulesyncDirExists({ baseDir: "/project" });
+    const result = await checkRulesyncDirExists({ inputRoot: "/project" });
 
     expect(result).toBe(true);
     expect(fileExists).toHaveBeenCalledWith("/project/.rulesync");
@@ -50,7 +67,7 @@ describe("checkRulesyncDirExists", () => {
   it("should return false when .rulesync directory does not exist", async () => {
     vi.mocked(fileExists).mockResolvedValue(false);
 
-    const result = await checkRulesyncDirExists({ baseDir: "/project" });
+    const result = await checkRulesyncDirExists({ inputRoot: "/project" });
 
     expect(result).toBe(false);
     expect(fileExists).toHaveBeenCalledWith("/project/.rulesync");
@@ -62,34 +79,58 @@ const createMockAiFile = (filePath: string, content: string) => ({
   getFileContent: () => content,
 });
 
+/**
+ * Build a minimal processor mock whose `writeAiFiles` is the supplied spy, used
+ * by the execution-order tests to observe invocation order on a shared output
+ * file. `convertRulesyncFilesToToolFiles` returns an empty array because these
+ * tests only assert call order, not generated content; `writeAiFiles` is invoked
+ * unconditionally in `processFeatureGeneration` (see generate.ts), so the empty
+ * array does not skip the write.
+ */
+const createMockProcessorWith = (writeAiFiles: ReturnType<typeof vi.fn>) => ({
+  loadToolFiles: vi.fn().mockResolvedValue([]),
+  removeOrphanAiFiles: vi.fn().mockResolvedValue(0),
+  loadRulesyncFiles: vi.fn().mockResolvedValue([{ file: "test" }]),
+  convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue([]),
+  writeAiFiles,
+});
+
 describe("generate", () => {
   let mockConfig: {
     getVerbose: ReturnType<typeof vi.fn>;
     getSilent: ReturnType<typeof vi.fn>;
-    getBaseDirs: ReturnType<typeof vi.fn>;
+    getOutputRoots: ReturnType<typeof vi.fn>;
     getTargets: ReturnType<typeof vi.fn>;
+    getConfigFileTargets: ReturnType<typeof vi.fn>;
     getFeatures: ReturnType<typeof vi.fn>;
+    getFeatureOptions: ReturnType<typeof vi.fn>;
     getDelete: ReturnType<typeof vi.fn>;
+    getCheck: ReturnType<typeof vi.fn>;
     getGlobal: ReturnType<typeof vi.fn>;
     getSimulateCommands: ReturnType<typeof vi.fn>;
     getSimulateSubagents: ReturnType<typeof vi.fn>;
     getSimulateSkills: ReturnType<typeof vi.fn>;
     isPreviewMode: ReturnType<typeof vi.fn>;
+    getInputRoot: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     mockConfig = {
       getVerbose: vi.fn().mockReturnValue(false),
       getSilent: vi.fn().mockReturnValue(false),
-      getBaseDirs: vi.fn().mockReturnValue(["."]),
+      getOutputRoots: vi.fn().mockReturnValue(["."]),
       getTargets: vi.fn().mockReturnValue(["claudecode"]),
+      getConfigFileTargets: vi.fn().mockReturnValue(["claudecode"]),
       getFeatures: vi.fn().mockReturnValue(["rules"]),
+      getFeatureOptions: vi.fn().mockReturnValue(undefined),
       getDelete: vi.fn().mockReturnValue(false),
+      getCheck: vi.fn().mockReturnValue(false),
       getGlobal: vi.fn().mockReturnValue(false),
       getSimulateCommands: vi.fn().mockReturnValue(false),
       getSimulateSubagents: vi.fn().mockReturnValue(false),
       getSimulateSkills: vi.fn().mockReturnValue(false),
       isPreviewMode: vi.fn().mockReturnValue(false),
+      getInputRoot: vi.fn().mockReturnValue(process.cwd()),
     };
 
     vi.mocked(intersection).mockImplementation((a, b) => a.filter((item) => b.includes(item)));
@@ -104,6 +145,7 @@ describe("generate", () => {
     vi.mocked(CommandsProcessor.getToolTargets).mockReturnValue(["claudecode"]);
     vi.mocked(HooksProcessor.getToolTargets).mockReturnValue(["claudecode"]);
     vi.mocked(SkillsProcessor.getToolTargets).mockReturnValue(["claudecode"]);
+    vi.mocked(PermissionsProcessor.getToolTargets).mockReturnValue(["claudecode"]);
 
     const createMockProcessor = () => ({
       loadToolFiles: vi.fn().mockResolvedValue([]),
@@ -114,14 +156,6 @@ describe("generate", () => {
         .fn()
         .mockResolvedValue([createMockAiFile("/path/to/file", "content")]),
       writeAiFiles: vi.fn().mockResolvedValue({ count: 1, paths: [] }),
-    });
-
-    const createMockSkillsProcessor = () => ({
-      loadToolDirsToDelete: vi.fn().mockResolvedValue([]),
-      removeAiDirs: vi.fn().mockResolvedValue(undefined),
-      loadRulesyncDirs: vi.fn().mockResolvedValue([]),
-      convertRulesyncDirsToToolDirs: vi.fn().mockResolvedValue([]),
-      writeAiDirs: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
     });
 
     vi.mocked(RulesProcessor).mockImplementation(function () {
@@ -142,6 +176,9 @@ describe("generate", () => {
     vi.mocked(HooksProcessor).mockImplementation(function () {
       return createMockProcessor() as unknown as HooksProcessor;
     });
+    vi.mocked(PermissionsProcessor).mockImplementation(function () {
+      return createMockProcessor() as unknown as PermissionsProcessor;
+    });
     vi.mocked(SkillsProcessor).mockImplementation(function () {
       return createMockSkillsProcessor() as unknown as SkillsProcessor;
     });
@@ -155,25 +192,27 @@ describe("generate", () => {
     it("should generate rules when feature is enabled", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.rulesCount).toBe(1);
-      expect(RulesProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        simulateCommands: false,
-        simulateSubagents: false,
-        simulateSkills: false,
-        skills: [],
-        dryRun: false,
-      });
+      expect(RulesProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          simulateCommands: false,
+          simulateSubagents: false,
+          simulateSkills: false,
+          skills: [],
+          dryRun: false,
+        }),
+      );
     });
 
     it("should return 0 rules when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.rulesCount).toBe(0);
       expect(RulesProcessor).not.toHaveBeenCalled();
@@ -183,7 +222,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["rules", "skills"]);
 
       const mockSkill = new RulesyncSkill({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".rulesync/skills/test",
         dirName: "test",
         frontmatter: { name: "test-skill", targets: ["*"], description: "Test skill" },
@@ -200,7 +239,7 @@ describe("generate", () => {
         return mockSkillsProcessor as unknown as SkillsProcessor;
       });
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(RulesProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -226,7 +265,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(mockProcessor.loadToolFiles).toHaveBeenCalledWith({ forDeletion: true });
       expect(mockProcessor.removeOrphanAiFiles).toHaveBeenCalledWith(existingFiles, generatedFiles);
@@ -251,7 +290,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       // removeOrphanAiFiles is called with both lists, the actual filtering happens inside
       expect(mockProcessor.removeOrphanAiFiles).toHaveBeenCalledWith(existingFiles, generatedFiles);
@@ -263,14 +302,14 @@ describe("generate", () => {
 
     it("should process multiple base directories", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
-      mockConfig.getBaseDirs.mockReturnValue(["dir1", "dir2"]);
+      mockConfig.getOutputRoots.mockReturnValue(["dir1", "dir2"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.rulesCount).toBe(2);
       expect(RulesProcessor).toHaveBeenCalledTimes(2);
-      expect(RulesProcessor).toHaveBeenCalledWith(expect.objectContaining({ baseDir: "dir1" }));
-      expect(RulesProcessor).toHaveBeenCalledWith(expect.objectContaining({ baseDir: "dir2" }));
+      expect(RulesProcessor).toHaveBeenCalledWith(expect.objectContaining({ outputRoot: "dir1" }));
+      expect(RulesProcessor).toHaveBeenCalledWith(expect.objectContaining({ outputRoot: "dir2" }));
     });
   });
 
@@ -278,7 +317,7 @@ describe("generate", () => {
     it("should generate ignore files when feature is enabled", async () => {
       mockConfig.getFeatures.mockReturnValue(["ignore"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.ignoreCount).toBe(1);
       expect(IgnoreProcessor).toHaveBeenCalled();
@@ -287,7 +326,7 @@ describe("generate", () => {
     it("should return 0 ignore files when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.ignoreCount).toBe(0);
       expect(IgnoreProcessor).not.toHaveBeenCalled();
@@ -297,7 +336,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["ignore"]);
       mockConfig.getGlobal.mockReturnValue(true);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.ignoreCount).toBe(0);
       expect(IgnoreProcessor).not.toHaveBeenCalled();
@@ -309,7 +348,7 @@ describe("generate", () => {
         throw new Error("Test error");
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.ignoreCount).toBe(0);
     });
@@ -328,7 +367,7 @@ describe("generate", () => {
         return mockProcessor as unknown as IgnoreProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.ignoreCount).toBe(0);
       expect(mockProcessor.convertRulesyncFilesToToolFiles).not.toHaveBeenCalled();
@@ -340,21 +379,23 @@ describe("generate", () => {
     it("should generate MCP files when feature is enabled", async () => {
       mockConfig.getFeatures.mockReturnValue(["mcp"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.mcpCount).toBe(1);
-      expect(McpProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(McpProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should return 0 MCP files when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.mcpCount).toBe(0);
       expect(McpProcessor).not.toHaveBeenCalled();
@@ -365,21 +406,23 @@ describe("generate", () => {
     it("should generate commands when feature is enabled", async () => {
       mockConfig.getFeatures.mockReturnValue(["commands"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.commandsCount).toBe(1);
-      expect(CommandsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(CommandsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should return 0 commands when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.commandsCount).toBe(0);
       expect(CommandsProcessor).not.toHaveBeenCalled();
@@ -389,7 +432,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["commands"]);
       mockConfig.getSimulateCommands.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(CommandsProcessor.getToolTargets).toHaveBeenCalledWith({
         global: false,
@@ -402,21 +445,23 @@ describe("generate", () => {
     it("should generate subagents when feature is enabled", async () => {
       mockConfig.getFeatures.mockReturnValue(["subagents"]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.subagentsCount).toBe(1);
-      expect(SubagentsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(SubagentsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should return 0 subagents when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.subagentsCount).toBe(0);
       expect(SubagentsProcessor).not.toHaveBeenCalled();
@@ -426,7 +471,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["subagents"]);
       mockConfig.getSimulateSubagents.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(SubagentsProcessor.getToolTargets).toHaveBeenCalledWith({
         global: false,
@@ -450,21 +495,23 @@ describe("generate", () => {
         return mockSkillsProcessor as unknown as SkillsProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.skillsCount).toBe(1);
-      expect(SkillsProcessor).toHaveBeenCalledWith({
-        baseDir: ".",
-        toolTarget: "claudecode",
-        global: false,
-        dryRun: false,
-      });
+      expect(SkillsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: false,
+          dryRun: false,
+        }),
+      );
     });
 
     it("should return 0 skills when feature is not enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.skillsCount).toBe(0);
       expect(result.skills).toEqual([]);
@@ -475,7 +522,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["skills"]);
 
       const mockSkill = new RulesyncSkill({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".rulesync/skills/test",
         dirName: "test",
         frontmatter: { name: "test-skill", targets: ["*"], description: "Test skill" },
@@ -492,7 +539,7 @@ describe("generate", () => {
         return mockSkillsProcessor as unknown as SkillsProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.skills).toContain(mockSkill);
     });
@@ -514,7 +561,7 @@ describe("generate", () => {
         return mockSkillsProcessor as unknown as SkillsProcessor;
       });
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(mockSkillsProcessor.loadToolDirsToDelete).toHaveBeenCalled();
       expect(mockSkillsProcessor.removeOrphanAiDirs).toHaveBeenCalledWith(
@@ -528,6 +575,108 @@ describe("generate", () => {
     });
   });
 
+  describe("permissions feature", () => {
+    it("should generate permissions when feature is enabled", async () => {
+      mockConfig.getFeatures.mockReturnValue(["permissions"]);
+
+      const result = await generate({ logger, config: mockConfig as never });
+
+      expect(result.permissionsCount).toBe(1);
+      expect(PermissionsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          dryRun: false,
+        }),
+      );
+    });
+
+    it("should return 0 permissions when feature is not enabled", async () => {
+      mockConfig.getFeatures.mockReturnValue([]);
+
+      const result = await generate({ logger, config: mockConfig as never });
+
+      expect(result.permissionsCount).toBe(0);
+      expect(PermissionsProcessor).not.toHaveBeenCalled();
+    });
+
+    it("should generate permissions in global mode when target supports it", async () => {
+      mockConfig.getFeatures.mockReturnValue(["permissions"]);
+      mockConfig.getGlobal.mockReturnValue(true);
+      vi.mocked(PermissionsProcessor.getToolTargets).mockImplementation((params) =>
+        params?.global ? ["claudecode"] : ["claudecode"],
+      );
+
+      const result = await generate({ logger, config: mockConfig as never });
+
+      expect(result.permissionsCount).toBe(1);
+      expect(PermissionsProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputRoot: ".",
+          toolTarget: "claudecode",
+          global: true,
+        }),
+      );
+    });
+
+    it("should handle errors gracefully and continue", async () => {
+      mockConfig.getFeatures.mockReturnValue(["permissions"]);
+      vi.mocked(PermissionsProcessor).mockImplementation(function () {
+        throw new Error("Test error");
+      });
+
+      const result = await generate({ logger, config: mockConfig as never });
+
+      expect(result.permissionsCount).toBe(0);
+    });
+  });
+
+  describe("execution order constraints", () => {
+    it("should run ignore before permissions to prevent shared settings.json data loss", async () => {
+      mockConfig.getFeatures.mockReturnValue(["ignore", "permissions"]);
+
+      const ignoreWriteAiFiles = vi.fn().mockResolvedValue({ count: 1, paths: [] });
+      const permissionsWriteAiFiles = vi.fn().mockResolvedValue({ count: 1, paths: [] });
+
+      vi.mocked(IgnoreProcessor).mockImplementation(function () {
+        return createMockProcessorWith(ignoreWriteAiFiles) as unknown as IgnoreProcessor;
+      });
+      vi.mocked(PermissionsProcessor).mockImplementation(function () {
+        return createMockProcessorWith(permissionsWriteAiFiles) as unknown as PermissionsProcessor;
+      });
+
+      await generate({ logger, config: mockConfig as never });
+
+      expect(ignoreWriteAiFiles).toHaveBeenCalled();
+      expect(permissionsWriteAiFiles).toHaveBeenCalled();
+      const ignoreCall = ignoreWriteAiFiles.mock.invocationCallOrder[0] ?? 0;
+      const permissionsCall = permissionsWriteAiFiles.mock.invocationCallOrder[0] ?? 0;
+      expect(ignoreCall).toBeLessThan(permissionsCall);
+    });
+
+    it("should run mcp before rules to prevent shared kilo.jsonc data loss", async () => {
+      mockConfig.getFeatures.mockReturnValue(["mcp", "rules"]);
+
+      const mcpWriteAiFiles = vi.fn().mockResolvedValue({ count: 1, paths: [] });
+      const rulesWriteAiFiles = vi.fn().mockResolvedValue({ count: 1, paths: [] });
+
+      vi.mocked(McpProcessor).mockImplementation(function () {
+        return createMockProcessorWith(mcpWriteAiFiles) as unknown as McpProcessor;
+      });
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return createMockProcessorWith(rulesWriteAiFiles) as unknown as RulesProcessor;
+      });
+
+      await generate({ logger, config: mockConfig as never });
+
+      expect(mcpWriteAiFiles).toHaveBeenCalled();
+      expect(rulesWriteAiFiles).toHaveBeenCalled();
+      const mcpCall = mcpWriteAiFiles.mock.invocationCallOrder[0] ?? 0;
+      const rulesCall = rulesWriteAiFiles.mock.invocationCallOrder[0] ?? 0;
+      expect(mcpCall).toBeLessThan(rulesCall);
+    });
+  });
+
   describe("all features combined", () => {
     it("should generate all features when all are enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([
@@ -538,6 +687,7 @@ describe("generate", () => {
         "subagents",
         "skills",
         "hooks",
+        "permissions",
       ]);
 
       const mockSkillsProcessor = {
@@ -551,7 +701,7 @@ describe("generate", () => {
         return mockSkillsProcessor as unknown as SkillsProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.rulesCount).toBe(1);
       expect(result.ignoreCount).toBe(1);
@@ -560,12 +710,13 @@ describe("generate", () => {
       expect(result.subagentsCount).toBe(1);
       expect(result.skillsCount).toBe(1);
       expect(result.hooksCount).toBe(1);
+      expect(result.permissionsCount).toBe(1);
     });
 
     it("should return empty result when no features are enabled", async () => {
       mockConfig.getFeatures.mockReturnValue([]);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.rulesCount).toBe(0);
       expect(result.ignoreCount).toBe(0);
@@ -574,6 +725,7 @@ describe("generate", () => {
       expect(result.subagentsCount).toBe(0);
       expect(result.skillsCount).toBe(0);
       expect(result.hooksCount).toBe(0);
+      expect(result.permissionsCount).toBe(0);
       expect(result.skills).toEqual([]);
     });
   });
@@ -586,7 +738,7 @@ describe("generate", () => {
     it("should pass global flag to processors", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(RulesProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -598,7 +750,7 @@ describe("generate", () => {
     it("should use getToolTargets with global: true", async () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(RulesProcessor.getToolTargets).toHaveBeenCalledWith({ global: true });
     });
@@ -609,7 +761,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["rules"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(RulesProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -622,7 +774,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["ignore"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(IgnoreProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -635,7 +787,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["mcp"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(McpProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -648,7 +800,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["commands"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(CommandsProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -661,7 +813,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["subagents"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(SubagentsProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -674,7 +826,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["skills"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(SkillsProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -687,7 +839,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue(["hooks"]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      await generate({ config: mockConfig as never });
+      await generate({ logger, config: mockConfig as never });
 
       expect(HooksProcessor).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -700,7 +852,7 @@ describe("generate", () => {
       mockConfig.getFeatures.mockReturnValue([]);
       mockConfig.isPreviewMode.mockReturnValue(true);
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(false);
     });
@@ -723,7 +875,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(false);
       expect(result.rulesCount).toBe(0);
@@ -747,7 +899,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(true);
       expect(result.rulesCount).toBe(1);
@@ -771,7 +923,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(true);
     });
@@ -794,7 +946,7 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(false);
     });
@@ -817,23 +969,36 @@ describe("generate", () => {
         return mockProcessor as unknown as RulesProcessor;
       });
 
-      const result = await generate({ config: mockConfig as never });
+      const result = await generate({ logger, config: mockConfig as never });
+
+      expect(result.hasDiff).toBe(true);
+    });
+
+    it("should return hasDiff: true when orphan files would be deleted in dry run mode", async () => {
+      mockConfig.getFeatures.mockReturnValue(["rules"]);
+      mockConfig.getDelete.mockReturnValue(true);
+      mockConfig.isPreviewMode.mockReturnValue(true);
+
+      const existingFiles = [createMockAiFile("/path/to/orphan", "orphan content")];
+      const generatedFiles = [createMockAiFile("/path/to/kept", "content")];
+      const mockProcessor = {
+        loadToolFiles: vi.fn().mockResolvedValue(existingFiles),
+        removeOrphanAiFiles: vi.fn().mockResolvedValue(1),
+        loadRulesyncFiles: vi.fn().mockResolvedValue([{ file: "test" }]),
+        convertRulesyncFilesToToolFiles: vi.fn().mockResolvedValue(generatedFiles),
+        writeAiFiles: vi.fn().mockResolvedValue({ count: 0, paths: [] }),
+      };
+      vi.mocked(RulesProcessor).mockImplementation(function () {
+        return mockProcessor as unknown as RulesProcessor;
+      });
+
+      const result = await generate({ logger, config: mockConfig as never });
 
       expect(result.hasDiff).toBe(true);
     });
   });
 
   describe("unsupported target-feature warning", () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
-
-    beforeEach(() => {
-      warnSpy = vi.spyOn(logger, "warn");
-    });
-
-    afterEach(() => {
-      warnSpy.mockRestore();
-    });
-
     it("should warn when a target does not support an enabled feature", async () => {
       mockConfig.getTargets.mockReturnValue(["codexcli"]);
       // getFeatures(target) is called per-target; return "mcp" for codexcli
@@ -843,9 +1008,10 @@ describe("generate", () => {
       });
       vi.mocked(McpProcessor.getToolTargets).mockReturnValue(["claudecode"]);
 
-      await generate({ config: mockConfig as never });
+      const mockLogger = createMockLogger();
+      await generate({ logger: mockLogger, config: mockConfig as never });
 
-      expect(warnSpy).toHaveBeenCalledWith(
+      expect(mockLogger.warn).toHaveBeenCalledWith(
         "Target 'codexcli' does not support the feature 'mcp'. Skipping.",
       );
     });
@@ -858,9 +1024,10 @@ describe("generate", () => {
       });
       vi.mocked(RulesProcessor.getToolTargets).mockReturnValue(["claudecode"]);
 
-      await generate({ config: mockConfig as never });
+      const mockLogger = createMockLogger();
+      await generate({ logger: mockLogger, config: mockConfig as never });
 
-      expect(warnSpy).not.toHaveBeenCalledWith(
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("does not support the feature"),
       );
     });
@@ -871,9 +1038,10 @@ describe("generate", () => {
       mockConfig.getFeatures.mockImplementation(() => []);
       vi.mocked(McpProcessor.getToolTargets).mockReturnValue(["claudecode"]);
 
-      await generate({ config: mockConfig as never });
+      const mockLogger = createMockLogger();
+      await generate({ logger: mockLogger, config: mockConfig as never });
 
-      expect(warnSpy).not.toHaveBeenCalledWith(
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("does not support the feature"),
       );
     });
@@ -887,14 +1055,145 @@ describe("generate", () => {
       });
       vi.mocked(McpProcessor.getToolTargets).mockReturnValue(["claudecode"]);
 
-      await generate({ config: mockConfig as never });
+      const mockLogger = createMockLogger();
+      await generate({ logger: mockLogger, config: mockConfig as never });
 
-      expect(warnSpy).toHaveBeenCalledWith(
+      expect(mockLogger.warn).toHaveBeenCalledWith(
         "Target 'codexcli' does not support the feature 'mcp'. Skipping.",
       );
-      expect(warnSpy).toHaveBeenCalledWith(
+      expect(mockLogger.warn).toHaveBeenCalledWith(
         "Target 'cursor' does not support the feature 'mcp'. Skipping.",
       );
     });
+  });
+});
+
+const stubRun = async () => ({ count: 0, paths: [], hasDiff: false });
+
+const executionStep = (
+  id: string,
+  opts: { writesSharedFile?: string[]; dependsOn?: string[] } = {},
+) =>
+  ({
+    id,
+    ...opts,
+    run: stubRun,
+  }) as never;
+
+describe("resolveExecutionOrder", () => {
+  const step = executionStep;
+
+  it("orders a dependent step after its dependency regardless of array order", () => {
+    const ordered = resolveExecutionOrder([
+      step("rules", { writesSharedFile: ["f"], dependsOn: ["mcp"] }),
+      step("mcp", { writesSharedFile: ["f"] }),
+    ]);
+    expect(ordered.map((s) => s.id)).toEqual(["mcp", "rules"]);
+  });
+
+  it("orders a value-only dependency (no shared file) before its dependent", () => {
+    const ordered = resolveExecutionOrder([
+      step("rules", { dependsOn: ["skills"] }),
+      step("skills"),
+    ]);
+    expect(ordered.map((s) => s.id)).toEqual(["skills", "rules"]);
+  });
+
+  it("throws when two steps write the same shared file without a declared order", () => {
+    expect(() =>
+      resolveExecutionOrder([
+        step("ignore", { writesSharedFile: ["claude-settings"] }),
+        step("permissions", { writesSharedFile: ["claude-settings"] }),
+      ]),
+    ).toThrow(/both write the shared file 'claude-settings'/);
+  });
+
+  it("does not throw when shared-file writers are ordered by dependsOn", () => {
+    expect(() =>
+      resolveExecutionOrder([
+        step("ignore", { writesSharedFile: ["claude-settings"] }),
+        step("permissions", {
+          writesSharedFile: ["claude-settings"],
+          dependsOn: ["ignore"],
+        }),
+      ]),
+    ).not.toThrow();
+  });
+
+  it("throws when one of three writers is not ordered against the others", () => {
+    expect(() =>
+      resolveExecutionOrder([
+        step("ignore", { writesSharedFile: ["claude-settings"] }),
+        step("hooks", { writesSharedFile: ["claude-settings"], dependsOn: ["ignore"] }),
+        step("permissions", { writesSharedFile: ["claude-settings"], dependsOn: ["ignore"] }),
+      ]),
+    ).toThrow(/both write the shared file 'claude-settings'/);
+  });
+
+  it("does not throw when all three writers are totally ordered", () => {
+    expect(() =>
+      resolveExecutionOrder([
+        step("ignore", { writesSharedFile: ["claude-settings"] }),
+        step("hooks", { writesSharedFile: ["claude-settings"], dependsOn: ["ignore"] }),
+        step("permissions", {
+          writesSharedFile: ["claude-settings"],
+          dependsOn: ["ignore", "hooks"],
+        }),
+      ]),
+    ).not.toThrow();
+  });
+
+  it("throws on an unknown dependency", () => {
+    expect(() => resolveExecutionOrder([step("rules", { dependsOn: ["mcp"] })])).toThrow(
+      /unknown step 'mcp'/,
+    );
+  });
+
+  it("throws on a cyclic dependency", () => {
+    expect(() =>
+      resolveExecutionOrder([step("a", { dependsOn: ["b"] }), step("b", { dependsOn: ["a"] })]),
+    ).toThrow(/cyclic/);
+  });
+});
+
+const asRunnableSteps = () =>
+  GENERATION_STEP_GRAPH.map((meta) => ({ ...meta, run: stubRun }) as never);
+
+describe("GENERATION_STEP_GRAPH", () => {
+  it("is well-formed: every shared-file writer pair is ordered by dependsOn", () => {
+    expect(() => resolveExecutionOrder(asRunnableSteps())).not.toThrow();
+  });
+
+  it("declares every dependsOn edge for a reason: an overlapping writesSharedFile token, or the known rules->skills value dependency", () => {
+    const byId = new Map(GENERATION_STEP_GRAPH.map((meta) => [meta.id, meta]));
+    const knownValueDependencies = new Set(["rules->skills"]);
+
+    for (const step of GENERATION_STEP_GRAPH) {
+      for (const dep of step.dependsOn ?? []) {
+        const edgeKey = `${step.id}->${dep}`;
+        const depFiles = new Set(byId.get(dep)?.writesSharedFile ?? []);
+        const sharesFile = (step.writesSharedFile ?? []).some((file) => depFiles.has(file));
+
+        expect(
+          sharesFile || knownValueDependencies.has(edgeKey),
+          `dependsOn edge '${edgeKey}' has no overlapping writesSharedFile token and is not a ` +
+            `documented value dependency; either it's stale or the known-value-dependency list ` +
+            `needs updating`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("pins the full execution order of the real generation step graph", () => {
+    expect(resolveExecutionOrder(asRunnableSteps()).map((s) => s.id)).toEqual([
+      "ignore",
+      "commands",
+      "subagents",
+      "skills",
+      "mcp",
+      "hooks",
+      "permissions",
+      "rules",
+    ]);
   });
 });

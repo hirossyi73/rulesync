@@ -1,8 +1,21 @@
 import { join } from "node:path";
 
-import { uniq } from "es-toolkit";
+import { z } from "zod/mini";
 
+import {
+  CLAUDECODE_DIR,
+  CLAUDECODE_SETTINGS_FILE_NAME,
+  CLAUDECODE_SETTINGS_LOCAL_FILE_NAME,
+} from "../../constants/claudecode-paths.js";
+import type { ClaudeSettingsJson } from "../../types/claude-settings.js";
+import { FeatureOptions } from "../../types/features.js";
+import { formatError } from "../../utils/error.js";
 import { fileExists, readFileContent } from "../../utils/file.js";
+import {
+  applyIgnoreReadDenies,
+  buildReadDenyEntry,
+  isReadDenyEntry,
+} from "../shared/shared-config-gateway.js";
 import { RulesyncIgnore } from "./rulesync-ignore.js";
 import {
   ToolIgnore,
@@ -11,34 +24,79 @@ import {
   ToolIgnoreFromRulesyncIgnoreParams,
   ToolIgnoreParams,
   ToolIgnoreSettablePaths,
+  ToolIgnoreSettablePathsParams,
 } from "./tool-ignore.js";
 
 export type ClaudecodeIgnoreParams = ToolIgnoreParams;
 
-type SettingsJsonValue = {
-  permissions?: {
-    deny?: string[] | null;
-  } | null;
+/**
+ * Controls which Claude Code settings file the ignore feature writes to.
+ *
+ * - `"shared"` (default): writes to `.claude/settings.json` so the deny list
+ *   can be committed and shared across the team.
+ * - `"local"`: writes to `.claude/settings.local.json`, which is ignored by
+ *   git by default and intended for per-developer overrides.
+ *
+ * History: prior to v7.x the ignore feature wrote to `settings.local.json`;
+ * see issue #1094 for the move to shared `settings.json` and #1374 for the
+ * follow-up that added this opt-out.
+ */
+type ClaudecodeIgnoreFileMode = "shared" | "local";
+
+const DEFAULT_FILE_MODE: ClaudecodeIgnoreFileMode = "shared";
+
+/**
+ * Schema for the per-feature options object that may be passed via
+ * `features.claudecode.ignore = { fileMode: "local" }`. Unknown keys are
+ * preserved (`z.looseObject`) so future tools can add their own keys without
+ * a coordinated migration, but `fileMode`, when present, must be one of the
+ * known literals — typos like `"LOCAL"` or `"private"` are rejected loudly
+ * rather than silently falling back to `"shared"`.
+ */
+const ClaudecodeIgnoreOptionsSchema = z.looseObject({
+  fileMode: z.optional(z.enum(["shared", "local"])),
+});
+
+const resolveFileMode = (options?: FeatureOptions | undefined): ClaudecodeIgnoreFileMode => {
+  if (!options) return DEFAULT_FILE_MODE;
+  const parsed = ClaudecodeIgnoreOptionsSchema.safeParse(options);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid options for claudecode ignore feature: ${parsed.error.message}. ` +
+        `\`fileMode\` must be either "shared" or "local".`,
+    );
+  }
+  return parsed.data.fileMode ?? DEFAULT_FILE_MODE;
+};
+
+const fileNameForMode = (fileMode: ClaudecodeIgnoreFileMode): string => {
+  return fileMode === "local" ? CLAUDECODE_SETTINGS_LOCAL_FILE_NAME : CLAUDECODE_SETTINGS_FILE_NAME;
 };
 
 export class ClaudecodeIgnore extends ToolIgnore {
   constructor(params: ClaudecodeIgnoreParams) {
     super(params);
 
-    const jsonValue: SettingsJsonValue = JSON.parse(this.fileContent);
+    const jsonValue: ClaudeSettingsJson = JSON.parse(this.fileContent);
     this.patterns = jsonValue.permissions?.deny ?? [];
   }
 
-  static getSettablePaths(): ToolIgnoreSettablePaths {
+  static getSettablePaths(params?: ToolIgnoreSettablePathsParams): ToolIgnoreSettablePaths {
+    const fileMode = resolveFileMode(params?.options);
     return {
-      relativeDirPath: ".claude",
-      relativeFilePath: "settings.json",
+      relativeDirPath: CLAUDECODE_DIR,
+      relativeFilePath: fileNameForMode(fileMode),
     };
   }
 
   /**
-   * ClaudecodeIgnore uses settings.json, which can include non-ignore settings.
-   * It should not be deleted by rulesync.
+   * ClaudecodeIgnore uses settings.json (or settings.local.json), which can
+   * include non-ignore settings. It should not be deleted by rulesync.
+   *
+   * NOTE: Because this returns `false`, switching `fileMode` (e.g. from
+   * `"local"` to `"shared"`) will not automatically clean up deny patterns
+   * in the previously-used file. Users must manually remove stale deny
+   * entries from the old file when changing `fileMode`.
    */
   override isDeletable(): boolean {
     return false;
@@ -51,7 +109,7 @@ export class ClaudecodeIgnore extends ToolIgnore {
     const rulesyncPatterns = this.patterns
       .map((pattern) => {
         // Remove "Read(" prefix and ")" suffix if present
-        if (pattern.startsWith("Read(") && pattern.endsWith(")")) {
+        if (isReadDenyEntry(pattern)) {
           return pattern.slice(5, -1);
         }
         return pattern;
@@ -62,7 +120,7 @@ export class ClaudecodeIgnore extends ToolIgnore {
     const fileContent = rulesyncPatterns.join("\n");
 
     return new RulesyncIgnore({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RulesyncIgnore.getSettablePaths().recommended.relativeDirPath,
       relativeFilePath: RulesyncIgnore.getSettablePaths().recommended.relativeFilePath,
       fileContent,
@@ -70,8 +128,9 @@ export class ClaudecodeIgnore extends ToolIgnore {
   }
 
   static async fromRulesyncIgnore({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncIgnore,
+    options,
   }: ToolIgnoreFromRulesyncIgnoreParams): Promise<ClaudecodeIgnore> {
     const fileContent = rulesyncIgnore.getFileContent();
 
@@ -79,71 +138,69 @@ export class ClaudecodeIgnore extends ToolIgnore {
       .split(/\r?\n|\r/)
       .map((line: string) => line.trim())
       .filter((line) => line.length > 0 && !line.startsWith("#"));
-    const deniedValues = patterns.map((pattern) => `Read(${pattern})`);
+    const deniedValues = patterns.map((pattern) => buildReadDenyEntry(pattern));
 
-    const filePath = join(
-      baseDir,
-      this.getSettablePaths().relativeDirPath,
-      this.getSettablePaths().relativeFilePath,
-    );
+    const paths = this.getSettablePaths({ options });
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
     const exists = await fileExists(filePath);
     const existingFileContent = exists ? await readFileContent(filePath) : "{}";
-    const existingJsonValue: SettingsJsonValue = JSON.parse(existingFileContent);
-    const existingDenies = existingJsonValue.permissions?.deny ?? [];
-    const preservedDenies = existingDenies.filter((deny) => {
-      const isReadPattern = deny.startsWith("Read(") && deny.endsWith(")");
-      if (isReadPattern) {
-        return deniedValues.includes(deny);
-      }
+    let existingJsonValue: ClaudeSettingsJson;
+    try {
+      existingJsonValue = JSON.parse(existingFileContent);
+    } catch (error) {
+      throw new Error(
+        `Failed to parse existing Claude settings at ${filePath}: ${formatError(error)}`,
+        { cause: error },
+      );
+    }
 
-      return true;
+    // The gateway owns the `permissions.deny` merge shared with the permissions
+    // feature; here we only state the intent (deny these Read patterns).
+    const jsonValue = applyIgnoreReadDenies({
+      settings: existingJsonValue,
+      readDenies: deniedValues,
     });
 
-    const jsonValue: SettingsJsonValue = {
-      ...existingJsonValue,
-      permissions: {
-        ...existingJsonValue.permissions,
-        deny: uniq([...preservedDenies, ...deniedValues].toSorted()),
-      },
-    };
-
     return new ClaudecodeIgnore({
-      baseDir,
-      relativeDirPath: this.getSettablePaths().relativeDirPath,
-      relativeFilePath: this.getSettablePaths().relativeFilePath,
+      outputRoot,
+      relativeDirPath: paths.relativeDirPath,
+      relativeFilePath: paths.relativeFilePath,
       fileContent: JSON.stringify(jsonValue, null, 2),
       validate: true,
     });
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
+    options,
   }: ToolIgnoreFromFileParams): Promise<ClaudecodeIgnore> {
-    const fileContent = await readFileContent(
-      join(
-        baseDir,
-        this.getSettablePaths().relativeDirPath,
-        this.getSettablePaths().relativeFilePath,
-      ),
-    );
+    const paths = this.getSettablePaths({ options });
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
+    // When the settings file does not exist (either shared or local mode),
+    // gracefully fall back to an empty settings document instead of throwing.
+    // This matches the pattern used by ClaudecodePermissions and ClaudecodeHooks,
+    // and prevents `rulesync import` from crashing when .claude/settings.json
+    // has not been created yet (see issue #1769).
+    const exists = await fileExists(filePath);
+    const fileContent = exists ? await readFileContent(filePath) : "{}";
 
     return new ClaudecodeIgnore({
-      baseDir,
-      relativeDirPath: this.getSettablePaths().relativeDirPath,
-      relativeFilePath: this.getSettablePaths().relativeFilePath,
+      outputRoot,
+      relativeDirPath: paths.relativeDirPath,
+      relativeFilePath: paths.relativeFilePath,
       fileContent: fileContent,
       validate,
     });
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolIgnoreForDeletionParams): ClaudecodeIgnore {
     return new ClaudecodeIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",

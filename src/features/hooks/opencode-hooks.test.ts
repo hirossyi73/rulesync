@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,7 +58,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -65,7 +66,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -101,7 +102,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -109,7 +110,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -121,6 +122,37 @@ describe("OpencodeHooks", () => {
       expect(content).toContain(".rulesync/hooks/lint.sh");
     });
 
+    it("should normalize only bare wildcard matcher to regex match-all pattern", () => {
+      const config = {
+        version: 1,
+        hooks: {
+          preToolUse: [
+            { type: "command", command: "all-tools.sh", matcher: "*" },
+            { type: "command", command: "read-tools.sh", matcher: "Read*" },
+          ],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = opencodeHooks.getFileContent();
+      expect(content).toContain('new RegExp(".*")');
+      expect(content).toContain('new RegExp("Read*")');
+      expect(content).toContain("all-tools.sh");
+      expect(content).toContain("read-tools.sh");
+    });
+
     it("should generate tool event handlers without matcher when not specified", () => {
       const config = {
         version: 1,
@@ -129,7 +161,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -137,7 +169,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -160,7 +192,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -168,7 +200,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -194,7 +226,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -202,7 +234,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -219,7 +251,7 @@ describe("OpencodeHooks", () => {
         hooks: {},
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -227,7 +259,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -236,8 +268,8 @@ describe("OpencodeHooks", () => {
         [
           "export const RulesyncHooksPlugin = async ({ $ }) => {",
           "  return {",
-          "  }",
-          "}",
+          "  };",
+          "};",
           "",
         ].join("\n"),
       );
@@ -251,7 +283,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -259,7 +291,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -281,7 +313,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -289,7 +321,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -301,6 +333,66 @@ describe("OpencodeHooks", () => {
       expect(content).toContain('new RegExp("Edit")');
     });
 
+    it("should generate valid block-scoped regex declarations for multiple matcher handlers", () => {
+      const config = {
+        version: 1,
+        hooks: {
+          postToolUse: [
+            { type: "command", command: "audit-read.sh", matcher: "Read" },
+            { type: "command", command: "audit-write.sh", matcher: "Write" },
+            { type: "command", command: "audit-edit.sh", matcher: "Edit" },
+          ],
+        },
+      };
+      const rulesyncHooks = new RulesyncHooks({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "hooks.json",
+        fileContent: JSON.stringify(config),
+        validate: false,
+      });
+
+      const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
+        outputRoot: testDir,
+        rulesyncHooks,
+        validate: false,
+      });
+
+      const content = opencodeHooks.getFileContent();
+      expect(content).toContain(
+        [
+          "      {",
+          '        const __re = new RegExp("Read");',
+          "        if (__re.test(input.tool)) {",
+          "          await $`audit-read.sh`;",
+          "        }",
+          "      }",
+        ].join("\n"),
+      );
+      expect(content).toContain(
+        [
+          "      {",
+          '        const __re = new RegExp("Write");',
+          "        if (__re.test(input.tool)) {",
+          "          await $`audit-write.sh`;",
+          "        }",
+          "      }",
+        ].join("\n"),
+      );
+      expect(content).toContain(
+        [
+          "      {",
+          '        const __re = new RegExp("Edit");',
+          "        if (__re.test(input.tool)) {",
+          "          await $`audit-edit.sh`;",
+          "        }",
+          "      }",
+        ].join("\n"),
+      );
+
+      execFileSync("node", ["--input-type=module", "--check"], { input: content });
+    });
+
     it("should throw on invalid regex in matcher", () => {
       const config = {
         version: 1,
@@ -309,7 +401,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -318,7 +410,7 @@ describe("OpencodeHooks", () => {
 
       expect(() =>
         OpencodeHooks.fromRulesyncHooks({
-          baseDir: testDir,
+          outputRoot: testDir,
           rulesyncHooks,
           validate: false,
         }),
@@ -333,7 +425,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -341,7 +433,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -361,7 +453,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -369,7 +461,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -386,7 +478,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -394,7 +486,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -414,7 +506,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -422,7 +514,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -440,7 +532,7 @@ describe("OpencodeHooks", () => {
         },
       };
       const rulesyncHooks = new RulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "hooks.json",
         fileContent: JSON.stringify(config),
@@ -448,7 +540,7 @@ describe("OpencodeHooks", () => {
       });
 
       const opencodeHooks = OpencodeHooks.fromRulesyncHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncHooks,
         validate: false,
       });
@@ -462,7 +554,7 @@ describe("OpencodeHooks", () => {
   describe("toRulesyncHooks", () => {
     it("should throw because OpenCode hooks cannot be converted back", () => {
       const opencodeHooks = new OpencodeHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".opencode", "plugins"),
         relativeFilePath: "rulesync-hooks.js",
         fileContent: "export const Plugin = async ({ $ }) => { return {} }",
@@ -487,7 +579,7 @@ describe("OpencodeHooks", () => {
       await writeFileContent(join(pluginsDir, "rulesync-hooks.js"), content);
 
       const opencodeHooks = await OpencodeHooks.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
       expect(opencodeHooks).toBeInstanceOf(OpencodeHooks);
@@ -498,7 +590,7 @@ describe("OpencodeHooks", () => {
   describe("forDeletion", () => {
     it("should return OpencodeHooks instance with empty content for deletion", () => {
       const hooks = OpencodeHooks.forDeletion({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".opencode", "plugins"),
         relativeFilePath: "rulesync-hooks.js",
       });
@@ -510,7 +602,7 @@ describe("OpencodeHooks", () => {
   describe("isDeletable", () => {
     it("should return true (plugin file is standalone and deletable)", () => {
       const hooks = new OpencodeHooks({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: join(".opencode", "plugins"),
         relativeFilePath: "rulesync-hooks.js",
         fileContent: "",

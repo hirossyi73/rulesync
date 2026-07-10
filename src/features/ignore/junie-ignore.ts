@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { JUNIE_IGNORE_FILE_NAME } from "../../constants/junie-paths.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncIgnore } from "./rulesync-ignore.js";
 import {
@@ -14,7 +15,7 @@ export class JunieIgnore extends ToolIgnore {
   static getSettablePaths(): ToolIgnoreSettablePaths {
     return {
       relativeDirPath: ".",
-      relativeFilePath: ".aiignore",
+      relativeFilePath: JUNIE_IGNORE_FILE_NAME,
     };
   }
 
@@ -23,11 +24,11 @@ export class JunieIgnore extends ToolIgnore {
   }
 
   static fromRulesyncIgnore({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncIgnore,
   }: ToolIgnoreFromRulesyncIgnoreParams): JunieIgnore {
     return new JunieIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: rulesyncIgnore.getFileContent(),
@@ -35,19 +36,19 @@ export class JunieIgnore extends ToolIgnore {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolIgnoreFromFileParams): Promise<JunieIgnore> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new JunieIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -56,12 +57,12 @@ export class JunieIgnore extends ToolIgnore {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolIgnoreForDeletionParams): JunieIgnore {
     return new JunieIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

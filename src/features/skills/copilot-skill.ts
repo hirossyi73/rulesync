@@ -2,6 +2,10 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import {
+  COPILOT_SKILLS_DIR_PATH,
+  COPILOT_SKILLS_GLOBAL_DIR_PATH,
+} from "../../constants/copilot-paths.js";
 import { SKILL_FILE_NAME } from "../../constants/general.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
@@ -19,12 +23,15 @@ export const CopilotSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
   license: z.optional(z.string()),
+  // Pre-approved tools the agent may run without per-use confirmation.
+  // https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills
+  "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
 });
 
 export type CopilotSkillFrontmatter = z.infer<typeof CopilotSkillFrontmatterSchema>;
 
 export type CopilotSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: CopilotSkillFrontmatter;
@@ -36,12 +43,16 @@ export type CopilotSkillParams = {
 
 /**
  * Represents a GitHub Copilot skill directory.
- * Skills are stored under the .github/skills directory with SKILL.md files.
+ *
+ * Copilot discovers project skills from `.github/skills/` and personal/global
+ * skills from `~/.copilot/skills/`. Each skill is a directory containing a
+ * `SKILL.md` file with `name`/`description` frontmatter.
+ * https://docs.github.com/en/copilot/concepts/agents/about-agent-skills
  */
 export class CopilotSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".github", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = COPILOT_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -50,7 +61,7 @@ export class CopilotSkill extends ToolSkill {
     global = false,
   }: CopilotSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -72,10 +83,12 @@ export class CopilotSkill extends ToolSkill {
 
   static getSettablePaths(options?: { global?: boolean }): ToolSkillSettablePaths {
     if (options?.global) {
-      throw new Error("CopilotSkill does not support global mode.");
+      return {
+        relativeDirPath: COPILOT_SKILLS_GLOBAL_DIR_PATH,
+      };
     }
     return {
-      relativeDirPath: join(".github", "skills"),
+      relativeDirPath: COPILOT_SKILLS_DIR_PATH,
     };
   }
 
@@ -111,19 +124,21 @@ export class CopilotSkill extends ToolSkill {
 
   toRulesyncSkill(): RulesyncSkill {
     const frontmatter = this.getFrontmatter();
+    const copilotSection = {
+      ...(frontmatter.license !== undefined && { license: frontmatter.license }),
+      ...(frontmatter["allowed-tools"] !== undefined && {
+        "allowed-tools": frontmatter["allowed-tools"],
+      }),
+    };
     const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
       name: frontmatter.name,
       description: frontmatter.description,
       targets: ["*"],
-      ...(frontmatter.license && {
-        copilot: {
-          license: frontmatter.license,
-        },
-      }),
+      ...(Object.keys(copilotSection).length > 0 && { copilot: copilotSection }),
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -135,7 +150,7 @@ export class CopilotSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
@@ -146,11 +161,16 @@ export class CopilotSkill extends ToolSkill {
     const copilotFrontmatter: CopilotSkillFrontmatter = {
       name: rulesyncFrontmatter.name,
       description: rulesyncFrontmatter.description,
-      license: rulesyncFrontmatter.copilot?.license,
+      ...(rulesyncFrontmatter.copilot?.license !== undefined && {
+        license: rulesyncFrontmatter.copilot.license,
+      }),
+      ...(rulesyncFrontmatter.copilot?.["allowed-tools"] !== undefined && {
+        "allowed-tools": rulesyncFrontmatter.copilot["allowed-tools"],
+      }),
     };
 
     return new CopilotSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rulesyncSkill.getDirName(),
       frontmatter: copilotFrontmatter,
@@ -174,14 +194,14 @@ export class CopilotSkill extends ToolSkill {
 
     const result = CopilotSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
     }
 
     return new CopilotSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -193,14 +213,14 @@ export class CopilotSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): CopilotSkill {
     const settablePaths = CopilotSkill.getSettablePaths({ global });
     return new CopilotSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: relativeDirPath ?? settablePaths.relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

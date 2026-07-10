@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setupTestDirectory } from "../test-utils/test-directories.js";
 import { writeFileContent } from "../utils/file.js";
+import type { Logger } from "../utils/logger.js";
 import { ConfigResolver } from "./config-resolver.js";
 
 const { getHomeDirectoryMock } = vi.hoisted(() => {
@@ -43,7 +44,7 @@ describe("config-resolver", () => {
   describe("global configuration", () => {
     it("should load global: true from config file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         global: true,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -57,7 +58,7 @@ describe("config-resolver", () => {
 
     it("should load global: false from config file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         global: false,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -71,7 +72,7 @@ describe("config-resolver", () => {
 
     it("should default global to false when not specified", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
 
@@ -84,7 +85,7 @@ describe("config-resolver", () => {
 
     it("should allow CLI flag to override config file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         global: false,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -101,7 +102,7 @@ describe("config-resolver", () => {
   describe("silent configuration", () => {
     it("should load silent: true from config file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         silent: true,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -115,7 +116,7 @@ describe("config-resolver", () => {
 
     it("should load silent: false from config file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         silent: false,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -129,7 +130,7 @@ describe("config-resolver", () => {
 
     it("should default silent to false when not specified", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
 
@@ -142,7 +143,7 @@ describe("config-resolver", () => {
 
     it("should allow CLI flag to override config file for silent", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         silent: false,
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
@@ -156,25 +157,47 @@ describe("config-resolver", () => {
     });
   });
 
-  describe("base directory resolution", () => {
-    it("should load configured baseDirs from file", async () => {
-      const configContent = JSON.stringify({
-        baseDirs: ["./src", "./packages"],
-      });
+  describe("config file targets (getConfigFileTargets)", () => {
+    it("expands wildcard targets ['*'] to the full non-legacy target list", async () => {
+      // Regression for #1981 / #1894: a `targets: ["*"]` config must not collapse
+      // to an empty config-file target list, otherwise root-file ownership in
+      // `generate --check` is computed against no targets and the bug reproduces.
+      const configContent = JSON.stringify({ outputRoots: ["./"], targets: ["*"] });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
 
       const config = await ConfigResolver.resolve({
         configPath: join(testDir, "rulesync.jsonc"),
       });
 
-      // baseDirs are now resolved to absolute paths
-      expect(config.getBaseDirs()).toContain(resolve("./src"));
-      expect(config.getBaseDirs()).toContain(resolve("./packages"));
+      const configFileTargets = config.getConfigFileTargets();
+      expect(configFileTargets.length).toBeGreaterThan(1);
+      expect(configFileTargets).toContain("claudecode");
+      expect(configFileTargets).toContain("codexcli");
+      // Legacy targets are excluded from wildcard expansion (must be explicit).
+      expect(configFileTargets).not.toContain("claudecode-legacy");
     });
 
-    it("should handle multiple baseDirs", async () => {
+    it("keeps the full config-file target list even when CLI -t selects one target", async () => {
+      const configContent = JSON.stringify({ outputRoots: ["./"], targets: ["*"] });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+        targets: ["codexcli"],
+      });
+
+      // CLI -t narrows the generated targets, but config-file ownership must
+      // still see every target the config lists.
+      expect(config.getTargets()).toEqual(["codexcli"]);
+      expect(config.getConfigFileTargets().length).toBeGreaterThan(1);
+      expect(config.getConfigFileTargets()).toContain("claudecode");
+    });
+  });
+
+  describe("base directory resolution", () => {
+    it("should load configured outputRoots from file", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./app1", "./app2", "./app3"],
+        outputRoots: ["./src", "./packages"],
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
 
@@ -182,18 +205,59 @@ describe("config-resolver", () => {
         configPath: join(testDir, "rulesync.jsonc"),
       });
 
-      // baseDirs are now resolved to absolute paths
-      expect(config.getBaseDirs()).toHaveLength(3);
-      expect(config.getBaseDirs()).toContain(resolve("./app1"));
-      expect(config.getBaseDirs()).toContain(resolve("./app2"));
-      expect(config.getBaseDirs()).toContain(resolve("./app3"));
+      // outputRoots are now resolved to absolute paths
+      expect(config.getOutputRoots()).toContain(resolve("./src"));
+      expect(config.getOutputRoots()).toContain(resolve("./packages"));
+    });
+
+    it("should handle multiple outputRoots", async () => {
+      const configContent = JSON.stringify({
+        outputRoots: ["./app1", "./app2", "./app3"],
+      });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      // outputRoots are now resolved to absolute paths
+      expect(config.getOutputRoots()).toHaveLength(3);
+      expect(config.getOutputRoots()).toContain(resolve("./app1"));
+      expect(config.getOutputRoots()).toContain(resolve("./app2"));
+      expect(config.getOutputRoots()).toContain(resolve("./app3"));
+    });
+
+    it("should resolve outputRoots configured per target", async () => {
+      const configContent = JSON.stringify({
+        targets: ["copilot", "claudecode"],
+        outputRoots: {
+          copilot: "./build/copilot",
+          claudecode: ["./build/claudecode", "./build/claude-extra"],
+        },
+      });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      expect(config.getOutputRoots("copilot")).toEqual([resolve("./build/copilot")]);
+      expect(config.getOutputRoots("claudecode")).toEqual([
+        resolve("./build/claudecode"),
+        resolve("./build/claude-extra"),
+      ]);
+      expect(config.getOutputRoots()).toEqual([
+        resolve("./build/copilot"),
+        resolve("./build/claudecode"),
+        resolve("./build/claude-extra"),
+      ]);
     });
   });
 
   describe("local configuration (rulesync.local.jsonc)", () => {
     it("should use rulesync.local.jsonc to override rulesync.jsonc", async () => {
       const baseConfigContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         targets: ["cursor"],
         verbose: false,
       });
@@ -214,7 +278,7 @@ describe("config-resolver", () => {
 
     it("should preserve rulesync.jsonc values not overridden by rulesync.local.jsonc", async () => {
       const baseConfigContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         targets: ["cursor"],
         features: ["rules", "mcp"],
         verbose: false,
@@ -238,7 +302,7 @@ describe("config-resolver", () => {
 
     it("should allow CLI options to override rulesync.local.jsonc", async () => {
       const baseConfigContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         targets: ["cursor"],
       });
       const localConfigContent = JSON.stringify({
@@ -260,7 +324,7 @@ describe("config-resolver", () => {
 
     it("should work without rulesync.local.jsonc", async () => {
       const baseConfigContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
         targets: ["cursor"],
         verbose: true,
       });
@@ -291,7 +355,10 @@ describe("config-resolver", () => {
 
     it("should load rulesync.local.jsonc from the same directory as the base config", async () => {
       const subDir = join(testDir, "subdir");
-      await writeFileContent(join(subDir, "rulesync.jsonc"), JSON.stringify({ baseDirs: ["./"] }));
+      await writeFileContent(
+        join(subDir, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"] }),
+      );
       await writeFileContent(
         join(subDir, "rulesync.local.jsonc"),
         JSON.stringify({ targets: ["cline"] }),
@@ -308,7 +375,7 @@ describe("config-resolver", () => {
   describe("configPath security", () => {
     it("should accept configPath within current directory", async () => {
       const configContent = JSON.stringify({
-        baseDirs: ["./"],
+        outputRoots: ["./"],
       });
       await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
 
@@ -316,7 +383,7 @@ describe("config-resolver", () => {
         configPath: join(testDir, "rulesync.jsonc"),
       });
 
-      expect(config.getBaseDirs()).toHaveLength(1);
+      expect(config.getOutputRoots()).toHaveLength(1);
     });
 
     it("should reject configPath with path traversal attempting to escape current directory", async () => {
@@ -341,6 +408,347 @@ describe("config-resolver", () => {
           configPath: "../../../sensitive-file.txt",
         }),
       ).rejects.toThrow("Path traversal detected");
+    });
+  });
+
+  describe("object-form targets end-to-end", () => {
+    it("should load object-form targets from rulesync.jsonc without reintroducing default features", async () => {
+      const configContent = JSON.stringify({
+        outputRoots: ["./"],
+        targets: {
+          claudecode: { rules: true, ignore: { fileMode: "local" } },
+          cursor: ["rules", "mcp"],
+        },
+      });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      expect(config.getTargets()).toEqual(["claudecode", "cursor"]);
+      expect(config.getFeatures("claudecode")).toEqual(["rules", "ignore"]);
+      expect(config.getFeatures("cursor")).toEqual(["rules", "mcp"]);
+      expect(config.getFeatureOptions("claudecode", "ignore")).toEqual({ fileMode: "local" });
+    });
+
+    it("should reject merged config when base has array-form features and local has object-form targets", async () => {
+      const baseConfigContent = JSON.stringify({
+        outputRoots: ["./"],
+        features: ["rules"],
+      });
+      const localConfigContent = JSON.stringify({
+        targets: { claudecode: ["rules"] },
+      });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), baseConfigContent);
+      await writeFileContent(join(testDir, "rulesync.local.jsonc"), localConfigContent);
+
+      await expect(
+        ConfigResolver.resolve({ configPath: join(testDir, "rulesync.jsonc") }),
+      ).rejects.toThrow(/detected after merging .* with .* the two files combined/);
+    });
+
+    it("should reject object-form targets combined with features from a config file", async () => {
+      const configContent = JSON.stringify({
+        outputRoots: ["./"],
+        targets: { claudecode: ["rules"] },
+        features: ["rules"],
+      });
+      await writeFileContent(join(testDir, "rulesync.jsonc"), configContent);
+
+      await expect(
+        ConfigResolver.resolve({ configPath: join(testDir, "rulesync.jsonc") }),
+      ).rejects.toThrow(/when 'targets' is in object form, 'features' must be omitted/);
+    });
+  });
+
+  describe("inputRoot — configPath resolution", () => {
+    it("should resolve a relative configPath against inputRoot, not cwd", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["claudecode"], verbose: true }),
+      );
+      // A differently-configured file in cwd that must NOT be picked up.
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["cursor"], verbose: false }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+      });
+
+      expect(config.getTargets()).toEqual(["claudecode"]);
+      expect(config.getVerbose()).toBe(true);
+    });
+
+    it("should resolve the default configPath against inputRoot when no configPath is provided", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["claudecode"] }),
+      );
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["cursor"] }),
+      );
+
+      const config = await ConfigResolver.resolve({ inputRoot });
+
+      expect(config.getTargets()).toEqual(["claudecode"]);
+    });
+
+    it("should load rulesync.local.jsonc from inputRoot alongside the base config", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["cursor"], verbose: false }),
+      );
+      await writeFileContent(
+        join(inputRoot, "rulesync.local.jsonc"),
+        JSON.stringify({ targets: ["claudecode"], verbose: true }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+      });
+
+      expect(config.getTargets()).toEqual(["claudecode"]);
+      expect(config.getVerbose()).toBe(true);
+    });
+
+    it("should reject a relative configPath that escapes inputRoot", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      // Ensure parent contains a tempting target.
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ targets: ["cursor"] }),
+      );
+
+      await expect(
+        ConfigResolver.resolve({
+          configPath: "../rulesync.jsonc",
+          inputRoot,
+        }),
+      ).rejects.toThrow("Path traversal detected");
+    });
+  });
+
+  describe("inputRoot — global precedence", () => {
+    it("should force global to false when inputRoot is set and config file has global: true", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+      });
+
+      expect(config.getGlobal()).toBe(false);
+    });
+
+    it("should warn when dropping config-file global: true because inputRoot overrides it", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+      const logger = { warn: vi.fn() } as unknown as Logger;
+
+      await ConfigResolver.resolve(
+        {
+          configPath: "rulesync.jsonc",
+          inputRoot,
+        },
+        { logger },
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "global: true"'));
+    });
+
+    it("should fall back to console.warn when no logger is supplied", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+      const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await ConfigResolver.resolve({
+          configPath: "rulesync.jsonc",
+          inputRoot,
+        });
+
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Ignoring "global: true"'),
+        );
+      } finally {
+        consoleWarnSpy.mockRestore();
+      }
+    });
+
+    it("should warn when only the config file (not CLI) supplies inputRoot and global: true", async () => {
+      // The warning must fire symmetrically whether inputRoot is set via
+      // CLI flag or via the config file — otherwise users moving from
+      // --input-root to a config-file-driven setup would silently lose
+      // their global-scope output.
+      const configuredRoot = join(testDir, "from-config");
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ inputRoot: configuredRoot, global: true }),
+      );
+      const logger = { warn: vi.fn() } as unknown as Logger;
+
+      const config = await ConfigResolver.resolve(
+        {
+          configPath: join(testDir, "rulesync.jsonc"),
+        },
+        { logger },
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "global: true"'));
+      expect(config.getGlobal()).toBe(false);
+    });
+
+    it("should not warn when CLI --global is explicitly passed alongside inputRoot", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+      const logger = { warn: vi.fn() } as unknown as Logger;
+
+      await ConfigResolver.resolve(
+        {
+          configPath: "rulesync.jsonc",
+          inputRoot,
+          global: true,
+        },
+        { logger },
+      );
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("should honor config file global: true when inputRoot is omitted", async () => {
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      expect(config.getGlobal()).toBe(true);
+    });
+
+    it("should allow CLI --global true to re-enable global even when inputRoot is set", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+        global: true,
+      });
+
+      expect(config.getGlobal()).toBe(true);
+    });
+
+    it("should let explicit CLI --global false win over config file global: true with inputRoot set", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"], global: true }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+        global: false,
+      });
+
+      expect(config.getGlobal()).toBe(false);
+    });
+
+    it("should keep global false by default when inputRoot is set and config file does not set global", async () => {
+      const inputRoot = join(testDir, "central-rules");
+      await writeFileContent(
+        join(inputRoot, "rulesync.jsonc"),
+        JSON.stringify({ outputRoots: ["./"] }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: "rulesync.jsonc",
+        inputRoot,
+      });
+
+      expect(config.getGlobal()).toBe(false);
+    });
+  });
+
+  describe("inputRoot — config-file sourcing", () => {
+    it("should honor inputRoot set in rulesync.jsonc and propagate it through mergeConfigs", async () => {
+      const configuredRoot = join(testDir, "from-config");
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ inputRoot: configuredRoot }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      expect(config.getInputRoot()).toBe(configuredRoot);
+    });
+
+    it("should let rulesync.local.jsonc override inputRoot from rulesync.jsonc", async () => {
+      const baseRoot = join(testDir, "from-base");
+      const localRoot = join(testDir, "from-local");
+      await writeFileContent(
+        join(testDir, "rulesync.jsonc"),
+        JSON.stringify({ inputRoot: baseRoot }),
+      );
+      await writeFileContent(
+        join(testDir, "rulesync.local.jsonc"),
+        JSON.stringify({ inputRoot: localRoot }),
+      );
+
+      const config = await ConfigResolver.resolve({
+        configPath: join(testDir, "rulesync.jsonc"),
+      });
+
+      expect(config.getInputRoot()).toBe(localRoot);
+    });
+
+    it("should reject a config-file inputRoot that fails validateOutputRoot", async () => {
+      // This test specifically pins the symmetric `validateOutputRoot` block that
+      // runs on `configByFile.inputRoot` (config-resolver.ts ~line 181). The
+      // `configOutputRoot` pre-check is unaffected here because cwd is inside the
+      // test temp dir and CLI `inputRoot` is unset; only the config-file
+      // inputRoot triggers validation. Picking the filesystem root forces the
+      // dedicated "filesystem root" error message — distinct from the
+      // "Path traversal" / "normalized absolute path" messages that would
+      // come from the pre-check, so removing the symmetric block would no
+      // longer satisfy this assertion.
+      await writeFileContent(join(testDir, "rulesync.jsonc"), JSON.stringify({ inputRoot: "/" }));
+
+      await expect(
+        ConfigResolver.resolve({
+          configPath: join(testDir, "rulesync.jsonc"),
+        }),
+      ).rejects.toThrow(/outputRoot must not be the filesystem root/);
     });
   });
 });

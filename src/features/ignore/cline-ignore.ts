@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { CLINE_IGNORE_FILE_NAME } from "../../constants/cline-paths.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncIgnore } from "./rulesync-ignore.js";
 import {
@@ -24,7 +25,7 @@ export class ClineIgnore extends ToolIgnore {
   static getSettablePaths(): ToolIgnoreSettablePaths {
     return {
       relativeDirPath: ".",
-      relativeFilePath: ".clineignore",
+      relativeFilePath: CLINE_IGNORE_FILE_NAME,
     };
   }
 
@@ -39,13 +40,13 @@ export class ClineIgnore extends ToolIgnore {
    * Create ClineIgnore from RulesyncIgnore
    */
   static fromRulesyncIgnore({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncIgnore,
   }: ToolIgnoreFromRulesyncIgnoreParams): ClineIgnore {
     const body = rulesyncIgnore.getFileContent();
 
     return new ClineIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: body,
@@ -56,19 +57,19 @@ export class ClineIgnore extends ToolIgnore {
    * Load ClineIgnore from .clineignore file
    */
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolIgnoreFromFileParams): Promise<ClineIgnore> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new ClineIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -77,12 +78,12 @@ export class ClineIgnore extends ToolIgnore {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolIgnoreForDeletionParams): ClineIgnore {
     return new ClineIgnore({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

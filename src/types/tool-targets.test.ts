@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PROCESSOR_REGISTRY } from "./processor-registry.js";
 import {
   ALL_TOOL_TARGETS,
   ALL_TOOL_TARGETS_WITH_WILDCARD,
@@ -11,10 +12,15 @@ import {
 describe("tool targets", () => {
   describe("ALL_TOOL_TARGETS", () => {
     it("should contain expected AI tool targets", () => {
+      // Order follows the union of the per-feature tuples (rules tuple first,
+      // then each feature's new targets appended in order — `agentsskills`,
+      // unique to skills, therefore lands last).
       const expectedTargets = [
         "agentsmd",
-        "agentsskills",
-        "antigravity",
+        "aiassistant",
+        "amp",
+        "antigravity-cli",
+        "antigravity-ide",
         "augmentcode",
         "augmentcode-legacy",
         "claudecode",
@@ -22,23 +28,34 @@ describe("tool targets", () => {
         "cline",
         "codexcli",
         "copilot",
+        "copilotcli",
         "cursor",
+        "deepagents",
         "factorydroid",
-        "geminicli",
         "goose",
+        "grokcli",
+        "hermesagent",
         "junie",
         "kilo",
         "kiro",
+        "kiro-cli",
+        "kiro-ide",
         "opencode",
+        "pi",
         "qwencode",
+        "reasonix",
         "replit",
         "roo",
+        "rovodev",
+        "takt",
+        "vibe",
         "warp",
-        "windsurf",
+        "devin",
         "zed",
+        "agentsskills",
       ];
 
-      expect(ALL_TOOL_TARGETS).toEqual(expectedTargets);
+      expect([...ALL_TOOL_TARGETS]).toEqual(expectedTargets);
       expect(ALL_TOOL_TARGETS).toHaveLength(expectedTargets.length);
     });
 
@@ -220,6 +237,54 @@ describe("tool targets", () => {
       // Should be valid for both schemas
       expect(() => ToolTargetsSchema.parse(validToolTargets)).not.toThrow();
       expect(() => RulesyncTargetsSchema.parse(validToolTargets)).not.toThrow();
+    });
+  });
+
+  describe("processor tool target consistency", () => {
+    const allTargetSet = new Set<string>(ALL_TOOL_TARGETS);
+
+    // Derived from the central PROCESSOR_REGISTRY, so a ninth feature added there
+    // is automatically covered by these checks — no hand-maintained list to drift.
+    const processors = PROCESSOR_REGISTRY.map((entry) => ({
+      name: entry.feature,
+      schema: entry.schema,
+      factory: entry.factory,
+    }));
+
+    for (const { name, schema } of processors) {
+      // Direction asserted: every target a processor declares must exist in
+      // ALL_TOOL_TARGETS (catches a typo'd or stale target inside a processor).
+      // The reverse (every ALL_TOOL_TARGETS entry must appear in every processor)
+      // is intentionally NOT asserted, because not every tool supports every
+      // feature. Adding a tool to ALL_TOOL_TARGETS without wiring it into a given
+      // processor is therefore legitimate and is not caught here by design.
+      it(`${name}: all tool targets must be a subset of ALL_TOOL_TARGETS`, () => {
+        const unknownTargets = schema.options.filter((target: string) => !allTargetSet.has(target));
+        expect(unknownTargets).toEqual([]);
+      });
+    }
+
+    // Stronger, bidirectional guarantee: a processor's schema enum must set-equal
+    // the keys of its factory Map. This catches drift in either direction within a
+    // single processor (a target in the schema but missing a factory, or a factory
+    // for a target the schema rejects). Applied to every processor, not just rules.
+    for (const { name, schema, factory } of processors) {
+      it(`${name}: schema options must match factory map keys`, () => {
+        const schemaTargets = [...schema.options].toSorted();
+        const factoryTargets = [...factory.keys()].toSorted();
+        expect(schemaTargets).toEqual(factoryTargets);
+      });
+    }
+
+    // ALL_TOOL_TARGETS is derived from the feature tuples; this asserts those
+    // tuples agree with the factory-map keys, so a tool present in a factory but
+    // missing from its tuple (or vice versa) fails the build.
+    it("ALL_TOOL_TARGETS equals the union of all processor factory keys", () => {
+      const union = new Set<string>();
+      for (const { factory } of processors) {
+        for (const target of factory.keys()) union.add(target);
+      }
+      expect([...union].toSorted()).toEqual([...ALL_TOOL_TARGETS].toSorted());
     });
   });
 });

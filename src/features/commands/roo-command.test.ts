@@ -18,7 +18,7 @@ describe("RooCommand", () => {
       const body = "This is a test command body";
 
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter,
@@ -40,7 +40,7 @@ describe("RooCommand", () => {
       const body = "Command with argument hint";
 
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test-with-hint.md",
         frontmatter,
@@ -58,7 +58,7 @@ describe("RooCommand", () => {
 
       expect(() => {
         new RooCommand({
-          baseDir: ".",
+          outputRoot: ".",
           relativeDirPath: ".roo/commands",
           relativeFilePath: "test.md",
           frontmatter: invalidFrontmatter as any,
@@ -76,7 +76,7 @@ describe("RooCommand", () => {
 
       expect(() => {
         new RooCommand({
-          baseDir: ".",
+          outputRoot: ".",
           relativeDirPath: ".roo/commands",
           relativeFilePath: "test.md",
           frontmatter: invalidFrontmatter as any,
@@ -95,7 +95,7 @@ describe("RooCommand", () => {
       };
 
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter,
@@ -110,7 +110,7 @@ describe("RooCommand", () => {
 
     it("should return error for invalid frontmatter", () => {
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter: { description: 123 } as any,
@@ -127,7 +127,7 @@ describe("RooCommand", () => {
     it("should return success when frontmatter is undefined", () => {
       // Create a command with undefined frontmatter by manipulating the private field
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter: { description: "test" },
@@ -153,7 +153,7 @@ describe("RooCommand", () => {
       const body = "This command will be converted";
 
       const rooCommand = new RooCommand({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "convert-test.md",
         frontmatter,
@@ -171,7 +171,37 @@ describe("RooCommand", () => {
       });
       expect(rulesyncCommand.getRelativeDirPath()).toBe(RULESYNC_COMMANDS_RELATIVE_DIR_PATH);
       expect(rulesyncCommand.getRelativeFilePath()).toBe("convert-test.md");
-      expect(rulesyncCommand.getBaseDir()).toBe(".");
+      expect(rulesyncCommand.getOutputRoot()).toBe(".");
+    });
+
+    it("should carry the mode field through the roo section and round-trip back", () => {
+      const frontmatter: RooCommandFrontmatter = {
+        description: "Switches to architect mode",
+        mode: "architect",
+      };
+      const body = "Plan the change";
+
+      const rooCommand = new RooCommand({
+        outputRoot: "/test/base",
+        relativeDirPath: ".roo/commands",
+        relativeFilePath: "plan.md",
+        frontmatter,
+        body,
+        fileContent: stringifyFrontmatter(body, frontmatter),
+      });
+
+      const rulesyncCommand = rooCommand.toRulesyncCommand();
+      expect(rulesyncCommand.getFrontmatter()).toEqual({
+        targets: ["roo"],
+        description: "Switches to architect mode",
+        roo: { mode: "architect" },
+      });
+
+      const roundTripped = RooCommand.fromRulesyncCommand({ rulesyncCommand });
+      expect(roundTripped.getFrontmatter()).toEqual({
+        description: "Switches to architect mode",
+        mode: "architect",
+      });
     });
   });
 
@@ -184,7 +214,7 @@ describe("RooCommand", () => {
       const body = "Command converted from rulesync";
 
       const rulesyncCommand = new RulesyncCommand({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
         relativeFilePath: "from-rulesync.md",
         frontmatter: rulesyncFrontmatter,
@@ -193,7 +223,7 @@ describe("RooCommand", () => {
       });
 
       const rooCommand = RooCommand.fromRulesyncCommand({
-        baseDir: "/converted/base",
+        outputRoot: "/converted/base",
         rulesyncCommand,
         validate: true,
       });
@@ -205,16 +235,16 @@ describe("RooCommand", () => {
       });
       expect(rooCommand.getRelativeDirPath()).toBe(".roo/commands");
       expect(rooCommand.getRelativeFilePath()).toBe("from-rulesync.md");
-      expect(rooCommand.getBaseDir()).toBe("/converted/base");
+      expect(rooCommand.getOutputRoot()).toBe("/converted/base");
     });
 
-    it("should use default baseDir when not provided", () => {
+    it("should use default outputRoot when not provided", () => {
       const mockCwd = "/mock/cwd";
       const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(mockCwd);
 
       try {
         const rulesyncCommand = new RulesyncCommand({
-          baseDir: "/test/base",
+          outputRoot: "/test/base",
           relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
           relativeFilePath: "test.md",
           frontmatter: { targets: ["roo" as const], description: "test" },
@@ -226,7 +256,7 @@ describe("RooCommand", () => {
           rulesyncCommand,
         });
 
-        expect(rooCommand.getBaseDir()).toBe(mockCwd);
+        expect(rooCommand.getOutputRoot()).toBe(mockCwd);
       } finally {
         cwdSpy.mockRestore();
       }
@@ -234,7 +264,7 @@ describe("RooCommand", () => {
 
     it("should handle validation parameter", () => {
       const rulesyncCommand = new RulesyncCommand({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: { targets: ["roo" as const], description: "test" },
@@ -270,7 +300,7 @@ describe("RooCommand", () => {
         await writeFileContent(filePath, fileContent);
 
         const command = await RooCommand.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "from-file.md",
           validate: true,
         });
@@ -280,13 +310,13 @@ describe("RooCommand", () => {
         expect(command.getFrontmatter()).toEqual(frontmatter);
         expect(command.getRelativeDirPath()).toBe(".roo/commands");
         expect(command.getRelativeFilePath()).toBe("from-file.md");
-        expect(command.getBaseDir()).toBe(testDir);
+        expect(command.getOutputRoot()).toBe(testDir);
       } finally {
         await cleanup();
       }
     });
 
-    it("should use default baseDir when not provided", async () => {
+    it("should use default outputRoot when not provided", async () => {
       const testSetup = await setupTestDirectory();
       const { testDir, cleanup } = testSetup;
 
@@ -295,7 +325,7 @@ describe("RooCommand", () => {
 
       try {
         const frontmatter: RooCommandFrontmatter = {
-          description: "Command with default baseDir",
+          description: "Command with default outputRoot",
         };
         const body = "Test body";
         const fileContent = stringifyFrontmatter(body, frontmatter);
@@ -309,7 +339,7 @@ describe("RooCommand", () => {
           relativeFilePath: "default-base.md",
         });
 
-        expect(command.getBaseDir()).toBe(testDir);
+        expect(command.getOutputRoot()).toBe(testDir);
       } finally {
         cwdSpy.mockRestore();
         await cleanup();
@@ -332,7 +362,7 @@ describe("RooCommand", () => {
         await writeFileContent(filePath, fileContent);
 
         const command = await RooCommand.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "no-validation.md",
           validate: false,
         });
@@ -359,7 +389,7 @@ This file has invalid frontmatter`;
 
         await expect(
           RooCommand.fromFile({
-            baseDir: testDir,
+            outputRoot: testDir,
             relativeFilePath: "invalid.md",
           }),
         ).rejects.toThrow("Invalid frontmatter");
@@ -384,7 +414,7 @@ This file has invalid frontmatter`;
         await writeFileContent(filePath, fileContent);
 
         const command = await RooCommand.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "subfolder/nested.md",
         });
 
@@ -444,6 +474,20 @@ This file has invalid frontmatter`;
       expect(result.success).toBe(false);
     });
 
+    it("should accept a mode slug and reject a non-string mode", () => {
+      const valid = RooCommandFrontmatterSchema.safeParse({
+        description: "d",
+        mode: "code",
+      });
+      expect(valid.success).toBe(true);
+      if (valid.success) {
+        expect(valid.data.mode).toBe("code");
+      }
+
+      const invalid = RooCommandFrontmatterSchema.safeParse({ description: "d", mode: 1 });
+      expect(invalid.success).toBe(false);
+    });
+
     it("should reject frontmatter with invalid argument-hint type", () => {
       const invalidFrontmatter = {
         description: "Valid description",
@@ -477,7 +521,7 @@ This file has invalid frontmatter`;
     it("should return correct body", () => {
       const body = "Test command body content";
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter: { description: "test" },
@@ -494,7 +538,7 @@ This file has invalid frontmatter`;
         "argument-hint": "Test hint",
       };
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter,
@@ -513,7 +557,7 @@ This file has invalid frontmatter`;
       const expectedFileContent = stringifyFrontmatter(body, frontmatter);
 
       const command = new RooCommand({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "integration.md",
         frontmatter,
@@ -522,7 +566,7 @@ This file has invalid frontmatter`;
       });
 
       // Test inherited methods
-      expect(command.getBaseDir()).toBe("/test/base");
+      expect(command.getOutputRoot()).toBe("/test/base");
       expect(command.getRelativeDirPath()).toBe(".roo/commands");
       expect(command.getRelativeFilePath()).toBe("integration.md");
       expect(command.getFileContent()).toBe(expectedFileContent);
@@ -533,7 +577,7 @@ This file has invalid frontmatter`;
   describe("tool-specific field passthrough", () => {
     it("fromRulesyncCommand should preserve roo fields", () => {
       const rulesyncCommand = new RulesyncCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
         relativeFilePath: "passthrough-test.md",
         frontmatter: {
@@ -549,7 +593,7 @@ This file has invalid frontmatter`;
       });
 
       const rooCommand = RooCommand.fromRulesyncCommand({
-        baseDir: ".",
+        outputRoot: ".",
         rulesyncCommand,
       });
 
@@ -561,7 +605,7 @@ This file has invalid frontmatter`;
 
     it("toRulesyncCommand should preserve extra fields in roo section", () => {
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter: {
@@ -584,7 +628,7 @@ This file has invalid frontmatter`;
 
     it("round-trip should preserve all fields", () => {
       const original = new RulesyncCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: RULESYNC_COMMANDS_RELATIVE_DIR_PATH,
         relativeFilePath: "roundtrip.md",
         frontmatter: {
@@ -612,7 +656,7 @@ This file has invalid frontmatter`;
 
     it("should not include roo section when no extra fields", () => {
       const command = new RooCommand({
-        baseDir: ".",
+        outputRoot: ".",
         relativeDirPath: ".roo/commands",
         relativeFilePath: "test.md",
         frontmatter: {

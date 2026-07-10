@@ -2,10 +2,13 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createMockLogger } from "../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../test-utils/test-directories.js";
 import { ensureDir, fileExists, readFileContent, writeFileContent } from "../utils/file.js";
 import { fetchFiles, formatFetchSummary } from "./fetch.js";
 import { parseSource } from "./source-parser.js";
+
+const logger = createMockLogger();
 
 let mockClientInstance: any;
 
@@ -302,10 +305,7 @@ describe("fetchFiles", () => {
 
   it("should throw error for GitLab provider", async () => {
     await expect(
-      fetchFiles({
-        source: "gitlab:owner/repo",
-        baseDir: testDir,
-      }),
+      fetchFiles({ logger, source: "gitlab:owner/repo", outputRoot: testDir }),
     ).rejects.toThrow("GitLab is not yet supported");
   });
 
@@ -384,9 +384,10 @@ describe("fetchFiles", () => {
     );
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules", "skills", "mcp"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.source).toBe("owner/repo");
@@ -444,9 +445,10 @@ describe("fetchFiles", () => {
     mockClientInstance.getFileContent.mockResolvedValue("content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.files).toHaveLength(1);
@@ -490,9 +492,10 @@ describe("fetchFiles", () => {
     mockClientInstance.getFileContent.mockResolvedValue("new content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { conflict: "skip", features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.created).toBe(1);
@@ -534,9 +537,10 @@ describe("fetchFiles", () => {
     mockClientInstance.getFileContent.mockResolvedValue("new content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { conflict: "overwrite", features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.overwritten).toBe(1);
@@ -571,9 +575,10 @@ describe("fetchFiles", () => {
     mockClientInstance.getFileContent.mockResolvedValue("content");
 
     await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { output: "custom-output", features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Verify file was written to custom directory
@@ -596,9 +601,10 @@ describe("fetchFiles", () => {
     });
 
     await fetchFiles({
+      logger,
       source: "owner/repo@main",
       options: { ref: "develop", features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(mockClientInstance.listDirectory).toHaveBeenCalledWith(
@@ -634,13 +640,72 @@ describe("fetchFiles", () => {
     mockClientInstance.getFileContent.mockResolvedValue("content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo:packages/shared",
       options: { features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.created).toBe(1);
     expect(summary.files[0]?.relativePath).toBe("rules/overview.md");
+  });
+
+  it.each([
+    ["POSIX style input", "owner/repo:packages/shared"],
+    ["Windows style input (backslashes in subdir)", "owner/repo:packages\\shared"],
+    ["mixed separators in subdir", "owner/repo:packages/shared\\nested"],
+  ])("should send forward-slash paths to GitHub API (%s)", async (_label, source) => {
+    mockClientInstance.listDirectory.mockImplementation(
+      (owner: string, repo: string, path: string) => {
+        // Verify no backslashes in any path sent to GitHub API
+        expect(path, `GitHub API path "${path}" must not contain backslashes`).not.toContain("\\");
+
+        if (path.endsWith("/rules")) {
+          return Promise.resolve([
+            {
+              name: "overview.md",
+              path: `${path}/overview.md`,
+              type: "file",
+              sha: "abc",
+              size: 100,
+              download_url: "https://example.com",
+            },
+          ]);
+        }
+        if (!path.endsWith("/rules") && !path.includes(".")) {
+          return Promise.resolve([
+            {
+              name: "mcp.json",
+              path: `${path}/mcp.json`,
+              type: "file",
+              sha: "def",
+              size: 50,
+              download_url: "https://example.com",
+            },
+          ]);
+        }
+        const error = new Error("Not found");
+        Object.assign(error, { statusCode: 404 });
+        return Promise.reject(error);
+      },
+    );
+
+    mockClientInstance.getFileContent.mockResolvedValue("content");
+
+    const summary = await fetchFiles({
+      logger,
+      source,
+      options: { features: ["rules", "mcp"] },
+      outputRoot: testDir,
+    });
+
+    expect(summary.created).toBeGreaterThanOrEqual(1);
+
+    // Double-check: all listDirectory calls used forward-slash paths
+    for (const call of mockClientInstance.listDirectory.mock.calls) {
+      const apiPath = call[2] as string;
+      expect(apiPath, `GitHub API path "${apiPath}" must use forward slashes`).not.toContain("\\");
+    }
   });
 
   it("should reject path traversal attempts", async () => {
@@ -670,9 +735,10 @@ describe("fetchFiles", () => {
 
     await expect(
       fetchFiles({
+        logger,
         source: "owner/repo",
         options: { features: ["rules"] },
-        baseDir: testDir,
+        outputRoot: testDir,
       }),
     ).rejects.toThrow("Path traversal detected");
   });
@@ -680,8 +746,9 @@ describe("fetchFiles", () => {
   it("should reject output directory path traversal attempts", async () => {
     await expect(
       fetchFiles({
+        logger,
         source: "owner/repo",
-        baseDir: testDir,
+        outputRoot: testDir,
         options: {
           output: "../../outside",
         },
@@ -713,9 +780,10 @@ describe("fetchFiles", () => {
 
     await expect(
       fetchFiles({
+        logger,
         source: "owner/repo",
         options: { features: ["rules"] },
-        baseDir: testDir,
+        outputRoot: testDir,
       }),
     ).rejects.toThrow("exceeds maximum size limit");
   });
@@ -737,9 +805,10 @@ describe("fetchFiles", () => {
 
     await expect(
       fetchFiles({
+        logger,
         source: "owner/repo",
         options: { features: ["rules"] },
-        baseDir: testDir,
+        outputRoot: testDir,
       }),
     ).rejects.toThrow(/Maximum recursion depth.*exceeded/);
   });
@@ -800,9 +869,10 @@ describe("fetchFiles", () => {
       );
 
       const resultPromise = fetchFiles({
+        logger,
         source: "owner/repo",
         options: { features: ["rules"] },
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       // Wait for all 3 getFileContent calls to be made
@@ -866,9 +936,10 @@ describe("fetchFiles", () => {
 
       await expect(
         fetchFiles({
+          logger,
           source: "owner/repo",
           options: { features: ["rules"] },
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow("API rate limit exceeded");
     });
@@ -933,9 +1004,10 @@ describe("fetchFiles", () => {
       mockClientInstance.getFileContent.mockResolvedValue("content");
 
       const result = await fetchFiles({
+        logger,
         source: "owner/repo",
         options: { features: ["rules"] },
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(result.files).toHaveLength(2);
@@ -994,9 +1066,10 @@ describe("fetchFiles with target option", () => {
     mockClientInstance.getFileContent.mockResolvedValue("# Overview\n\nTest content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules"], target: "rulesync" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.source).toBe("owner/repo");
@@ -1034,9 +1107,10 @@ describe("fetchFiles with target option", () => {
     mockClientInstance.getFileContent.mockResolvedValue("# Overview\n\nTest content");
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.created).toBe(1);
@@ -1082,9 +1156,10 @@ Follow these guidelines for TypeScript development.
     mockClientInstance.getFileContent.mockResolvedValue(claudecodeRuleContent);
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules"], target: "claudecode" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.source).toBe("owner/repo");
@@ -1104,9 +1179,10 @@ Follow these guidelines for TypeScript development.
     // Try to fetch skills with claudecode target
     // Skills conversion is not supported, so it should skip gracefully
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["skills"], target: "claudecode" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Should return empty summary without errors
@@ -1140,9 +1216,10 @@ Follow these guidelines for TypeScript development.
 
     // Run fetch with tool target
     await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules"], target: "claudecode" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Verify no temp directories remain
@@ -1189,9 +1266,10 @@ Review the current changes and provide feedback.
     mockClientInstance.getFileContent.mockResolvedValue(commandContent);
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["commands"], target: "claudecode" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.source).toBe("owner/repo");
@@ -1246,9 +1324,10 @@ Review the current changes and provide feedback.
     );
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["rules", "commands"], target: "claudecode" },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     expect(summary.source).toBe("owner/repo");
@@ -1309,9 +1388,10 @@ Review the current changes and provide feedback.
     );
 
     const summary = await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["ignore", "mcp", "hooks"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Verify all files were fetched
@@ -1371,16 +1451,18 @@ Review the current changes and provide feedback.
 
     // First fetch from root
     await fetchFiles({
+      logger,
       source: "owner/repo",
       options: { features: ["mcp"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Second fetch from subdir
     await fetchFiles({
+      logger,
       source: "owner/repo:subdir",
       options: { features: ["ignore"] },
-      baseDir: testDir,
+      outputRoot: testDir,
     });
 
     // Verify separate API calls were made for different base paths

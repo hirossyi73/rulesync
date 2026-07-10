@@ -91,6 +91,7 @@ describe("RulesyncSkill", () => {
         description: "Claude Code specific skill",
         claudecode: {
           "allowed-tools": ["Bash", "Read", "Write"],
+          "scheduled-task": true,
         },
       };
 
@@ -103,6 +104,7 @@ describe("RulesyncSkill", () => {
 
       expect(skill.getFrontmatter().claudecode).toEqual({
         "allowed-tools": ["Bash", "Read", "Write"],
+        "scheduled-task": true,
       });
     });
 
@@ -575,12 +577,39 @@ This has leading and trailing whitespace.
     });
 
     it("should reject invalid claudecode configuration", () => {
+      // `allowed-tools` accepts a string or a string array, so a number is the
+      // invalid case that must still be rejected.
       const frontmatter = {
         name: "test-skill",
         description: "Test",
         claudecode: {
-          "allowed-tools": "not-array",
+          "allowed-tools": 123,
         },
+      };
+
+      const result = RulesyncSkillFrontmatterSchema.safeParse(frontmatter);
+      expect(result.success).toBe(false);
+    });
+
+    it("should accept root-level disable-model-invocation", () => {
+      const frontmatter = {
+        name: "test-skill",
+        description: "Test",
+        "disable-model-invocation": true,
+      };
+
+      const result = RulesyncSkillFrontmatterSchema.safeParse(frontmatter);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data["disable-model-invocation"]).toBe(true);
+      }
+    });
+
+    it("should reject non-boolean root-level disable-model-invocation", () => {
+      const frontmatter = {
+        name: "test-skill",
+        description: "Test",
+        "disable-model-invocation": "yes",
       };
 
       const result = RulesyncSkillFrontmatterSchema.safeParse(frontmatter);

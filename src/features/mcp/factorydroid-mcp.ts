@@ -1,5 +1,9 @@
 import { join } from "node:path";
 
+import {
+  FACTORYDROID_DIR,
+  FACTORYDROID_MCP_FILE_NAME,
+} from "../../constants/factorydroid-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { RulesyncMcp } from "./rulesync-mcp.js";
@@ -11,8 +15,6 @@ import {
   ToolMcpParams,
   ToolMcpSettablePaths,
 } from "./tool-mcp.js";
-
-export type FactorydroidMcpParams = ToolMcpParams;
 
 export class FactorydroidMcp extends ToolMcp {
   private readonly json: Record<string, unknown>;
@@ -28,25 +30,25 @@ export class FactorydroidMcp extends ToolMcp {
 
   static getSettablePaths(): ToolMcpSettablePaths {
     return {
-      relativeDirPath: ".factory",
-      relativeFilePath: "mcp.json",
+      relativeDirPath: FACTORYDROID_DIR,
+      relativeFilePath: FACTORYDROID_MCP_FILE_NAME,
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolMcpFromFileParams): Promise<FactorydroidMcp> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new FactorydroidMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -55,21 +57,24 @@ export class FactorydroidMcp extends ToolMcp {
   }
 
   static fromRulesyncMcp({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncMcp,
     validate = true,
   }: ToolMcpFromRulesyncMcpParams): FactorydroidMcp {
-    const json = rulesyncMcp.getJson();
+    // Use getMcpServers() (not getJson()) so rulesync-only fields and
+    // codex-only fields (`envVars`) are stripped before writing the
+    // Factory Droid config.
+    const mcpServers = rulesyncMcp.getMcpServers();
 
     // Factory Droid uses standard MCP format without transformations
     const factorydroidConfig = {
-      mcpServers: json.mcpServers || {},
+      mcpServers,
     };
 
     const fileContent = JSON.stringify(factorydroidConfig, null, 2);
 
     return new FactorydroidMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -78,13 +83,7 @@ export class FactorydroidMcp extends ToolMcp {
   }
 
   toRulesyncMcp(): RulesyncMcp {
-    return new RulesyncMcp({
-      baseDir: this.baseDir,
-      relativeDirPath: this.relativeDirPath,
-      relativeFilePath: "rulesync.mcp.json",
-      fileContent: JSON.stringify(this.json),
-      validate: true,
-    });
+    return this.toRulesyncMcpDefault();
   }
 
   validate(): ValidationResult {
@@ -92,12 +91,12 @@ export class FactorydroidMcp extends ToolMcp {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolMcpForDeletionParams): FactorydroidMcp {
     return new FactorydroidMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",

@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, expect } from "vitest";
 
 import { setupTestDirectory } from "../test-utils/test-directories.js";
+import type { ToolTarget } from "../types/tool-targets.js";
 
 // Save original working directory
 const originalCwd = process.cwd();
@@ -12,7 +13,7 @@ const originalCwd = process.cwd();
 export const execFileAsync = promisify(execFile);
 
 // Get the command to run from environment variable
-// Default to using tsx directly with the CLI entry point
+// Default to running the TypeScript CLI entry point via tsx
 const tsxPath = join(originalCwd, "node_modules", ".bin", "tsx");
 const cliPath = join(originalCwd, "src", "cli", "index.ts");
 
@@ -44,11 +45,23 @@ export async function runGenerate({
   target,
   features,
   global = false,
+  deleteFiles = false,
+  check = false,
+  simulateCommands = false,
+  simulateSubagents = false,
+  simulateSkills = false,
+  inputRoot,
   env,
 }: {
   target: string;
   features: string;
   global?: boolean;
+  deleteFiles?: boolean;
+  check?: boolean;
+  simulateCommands?: boolean;
+  simulateSubagents?: boolean;
+  simulateSkills?: boolean;
+  inputRoot?: string;
   env?: Record<string, string>;
 }): Promise<{ stdout: string; stderr: string }> {
   const args = [
@@ -59,8 +72,28 @@ export async function runGenerate({
     "--features",
     features,
     ...(global ? ["--global"] : []),
+    ...(deleteFiles ? ["--delete"] : []),
+    ...(check ? ["--check"] : []),
+    ...(simulateCommands ? ["--simulate-commands"] : []),
+    ...(simulateSubagents ? ["--simulate-subagents"] : []),
+    ...(simulateSkills ? ["--simulate-skills"] : []),
+    ...(inputRoot ? ["--input-root", inputRoot] : []),
   ];
   return execFileAsync(rulesyncCmd, args, env ? { env: { ...process.env, ...env } } : {});
+}
+
+/**
+ * Runs the `rulesync import` command with the given target and feature.
+ */
+export async function runImport({
+  target,
+  features,
+}: {
+  target: string;
+  features: string;
+}): Promise<{ stdout: string; stderr: string }> {
+  const args = [...rulesyncArgs, "import", "--targets", target, "--features", features];
+  return execFileAsync(rulesyncCmd, args);
 }
 
 /**
@@ -126,4 +159,72 @@ export function useGlobalTestDirectories(): {
     getProjectDir: () => projectDir,
     getHomeDir: () => homeDir,
   };
+}
+
+type ProcessorTargets = {
+  getToolTargets(options?: { global?: boolean; importOnly?: boolean }): ToolTarget[];
+};
+
+/**
+ * Asserts that an e2e generate/global happy-path matrix stays in lock-step with
+ * the tool targets a feature processor actually declares, so adding a tool to a
+ * processor without wiring it into the matrix (or dropping one) fails CI instead
+ * of silently eroding coverage.
+ *
+ * The declared targets (from `getToolTargets`) must be covered by the union of
+ * `testedTargets` (tools with an entry in the matrix `it.each` dictionary) and
+ * `untested` (tools intentionally excluded from this matrix — e.g. tools whose
+ * output only exists in another scope, or that merge into a shared file). Every
+ * excluded tool must be listed explicitly with a reason so the omission is a
+ * conscious decision rather than an accidental gap.
+ *
+ * `testedTargets` and `untested` must be disjoint: a tool cannot be both tested
+ * and intentionally untested. (A tool may legitimately appear more than once
+ * *within* `testedTargets` when it is exercised by several matrices — e.g. a
+ * tool that emits both a root `AGENTS.md` and a nested tree — so duplicates
+ * within a single side are allowed.)
+ *
+ * `-legacy` targets are dropped from the comparison: they are duplicate aliases
+ * that the same tables/generators exclude, and are never exercised end-to-end.
+ *
+ * Mirrors the "derive from the implementation, fail on drift" idiom already used
+ * by the TOOL_DISPLAY completeness check and the gitignore derivation.
+ */
+export function assertGenerateMatrixCoversTargets({
+  processor,
+  testedTargets,
+  untested = [],
+  global = false,
+}: {
+  processor: ProcessorTargets;
+  testedTargets: readonly string[];
+  untested?: readonly string[];
+  global?: boolean;
+}): void {
+  const declared = processor
+    .getToolTargets({ global })
+    .filter((target) => !target.endsWith("-legacy"));
+  const declaredSet = new Set<string>(declared);
+
+  // `testedTargets` and `untested` must be disjoint — a tool listed as both
+  // tested and intentionally untested is a contradiction the stray/uncovered
+  // checks below cannot catch (each set covers it, so neither fires).
+  const overlap = testedTargets.filter((t) => untested.includes(t)).toSorted();
+  expect(
+    overlap,
+    `These targets are listed in both \`testedTargets\` and \`untested\` (a target cannot be both tested and intentionally untested): ${overlap.join(", ")}`,
+  ).toEqual([]);
+
+  const stray = [...testedTargets, ...untested].filter((t) => !declaredSet.has(t)).toSorted();
+  expect(
+    stray,
+    `These matrix/untested entries are not declared by the processor (stale or mistyped): ${stray.join(", ")}`,
+  ).toEqual([]);
+
+  const covered = new Set<string>([...testedTargets, ...untested]);
+  const uncovered = declared.filter((t) => !covered.has(t)).toSorted();
+  expect(
+    uncovered,
+    `These tools are declared by the processor but missing from the e2e matrix. Add each to the matrix dictionary, or to the \`untested\` list with a reason: ${uncovered.join(", ")}`,
+  ).toEqual([]);
 }

@@ -20,10 +20,40 @@ export const RulesyncSubagentFrontmatterSchema = z.looseObject({
   targets: z._default(RulesyncTargetsSchema, ["*"]),
   name: z.string(),
   description: z.optional(z.string()),
+  takt: z.optional(
+    z.looseObject({
+      name: z.optional(z.string()),
+    }),
+  ),
+  roo: z.optional(
+    z.looseObject({
+      slug: z.optional(z.string()),
+      whenToUse: z.optional(z.string()),
+      roleDefinition: z.optional(z.string()),
+      customInstructions: z.optional(z.string()),
+      groups: z.optional(z.array(z.unknown())),
+    }),
+  ),
+  vibe: z.optional(
+    z.looseObject({
+      agent_type: z.optional(z.enum(["agent", "subagent"])),
+      display_name: z.optional(z.string()),
+      description: z.optional(z.string()),
+      safety: z.optional(z.string()),
+      active_model: z.optional(z.string()),
+      system_prompt: z.optional(z.string()),
+      system_prompt_id: z.optional(z.string()),
+      compaction_prompt: z.optional(z.string()),
+      compaction_prompt_id: z.optional(z.string()),
+      enabled_tools: z.optional(z.array(z.string())),
+      disabled_tools: z.optional(z.array(z.string())),
+      tools: z.optional(z.record(z.string(), z.looseObject({}))),
+    }),
+  ),
 });
 
 // Input type allows targets to be omitted (will use default value)
-export type RulesyncSubagentFrontmatterInput = z.input<typeof RulesyncSubagentFrontmatterSchema> &
+type RulesyncSubagentFrontmatterInput = z.input<typeof RulesyncSubagentFrontmatterSchema> &
   Partial<Record<ToolTarget, Record<string, unknown>>>;
 // Output type has targets always present after parsing
 export type RulesyncSubagentFrontmatter = z.infer<typeof RulesyncSubagentFrontmatterSchema> &
@@ -102,12 +132,19 @@ export class RulesyncSubagent extends RulesyncFile {
   }
 
   static async fromFile({
+    outputRoot = process.cwd(),
     relativeFilePath,
   }: RulesyncSubagentFromFileParams): Promise<RulesyncSubagent> {
     // Read file content
-    const filePath = join(process.cwd(), RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH, relativeFilePath);
+    const filePath = join(outputRoot, RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH, relativeFilePath);
     const fileContent = await readFileContent(filePath);
-    const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
+    const { frontmatter, body: content, hasFrontmatter } = parseFrontmatter(fileContent, filePath);
+
+    if (!hasFrontmatter) {
+      throw new Error(
+        `Missing frontmatter in ${filePath}. Rulesync files must begin with a YAML frontmatter block delimited by '---'.`,
+      );
+    }
 
     // Validate frontmatter using SubagentFrontmatterSchema
     const result = RulesyncSubagentFrontmatterSchema.safeParse(frontmatter);
@@ -118,7 +155,7 @@ export class RulesyncSubagent extends RulesyncFile {
     const filename = basename(relativeFilePath);
 
     return new RulesyncSubagent({
-      baseDir: process.cwd(),
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: filename,
       frontmatter: result.data,

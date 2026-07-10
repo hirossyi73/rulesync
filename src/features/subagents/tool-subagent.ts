@@ -13,6 +13,14 @@ export type ToolSubagentFromRulesyncSubagentParams = Omit<
 
 export type ToolSubagentSettablePaths = {
   relativeDirPath: string;
+  /**
+   * Additional directories to scan when *importing* subagents, beyond
+   * `relativeDirPath`. Generation and orphan deletion always target only
+   * `relativeDirPath`; these extra roots are read-only discovery locations
+   * (e.g. Junie also reads the cross-tool `.agents/` directory). Omitted by
+   * tools that have a single subagent directory.
+   */
+  importDirPaths?: string[];
 };
 
 export type ToolSubagentFromFileParams = AiFileFromFileParams & {
@@ -20,7 +28,7 @@ export type ToolSubagentFromFileParams = AiFileFromFileParams & {
 };
 
 export type ToolSubagentForDeletionParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath: string;
   relativeFilePath: string;
   global?: boolean;
@@ -48,6 +56,14 @@ export abstract class ToolSubagent extends ToolFile {
   }
 
   abstract toRulesyncSubagent(): RulesyncSubagent;
+
+  /**
+   * Optional fan-out hook for tools whose native format aggregates several
+   * subagents into one file (e.g. Roo's `.roomodes`). When implemented, the
+   * processor uses it during import so one tool file yields N rulesync
+   * subagents. Tools with a one-file-per-subagent layout omit it.
+   */
+  toRulesyncSubagents?(): RulesyncSubagent[];
 
   static isTargetedByRulesyncSubagent(_rulesyncSubagent: RulesyncSubagent): boolean {
     throw new Error("Please implement this method in the subclass.");

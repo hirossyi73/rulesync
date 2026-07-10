@@ -57,12 +57,12 @@ args = ["-y", "@anthropic-ai/mcp-server-filesystem", "/workspace"]
       expect(codexcliMcp.getFileContent()).toBe(validTomlContent);
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const validTomlContent = `[mcpServers]
 `;
 
       const codexcliMcp = new CodexcliMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".codex",
         relativeFilePath: "config.toml",
         fileContent: validTomlContent,
@@ -181,7 +181,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "${testDir}"]
       await writeFileContent(join(testDir, ".codex/config.toml"), tomlData);
 
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: false,
       });
 
@@ -199,7 +199,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "${testDir}"]
       await writeFileContent(join(testDir, ".codex/config.toml"), tomlData);
 
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -208,7 +208,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "${testDir}"]
       expect(codexcliMcp.getFilePath()).toBe(join(testDir, ".codex/config.toml"));
     });
 
-    it("should create instance from file with custom baseDir", async () => {
+    it("should create instance from file with custom outputRoot", async () => {
       const customDir = join(testDir, "custom");
       await ensureDir(join(customDir, ".codex"));
 
@@ -219,7 +219,7 @@ args = ["git-server.js"]
       await writeFileContent(join(customDir, ".codex/config.toml"), tomlData);
 
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: customDir,
+        outputRoot: customDir,
         global: true,
       });
 
@@ -236,7 +236,7 @@ args = ["server.js"]
       await writeFileContent(join(testDir, ".codex/config.toml"), tomlData);
 
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: true,
         global: true,
       });
@@ -251,7 +251,7 @@ args = ["server.js"]
       await writeFileContent(join(testDir, ".codex/config.toml"), tomlData);
 
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
         global: true,
       });
@@ -261,7 +261,7 @@ args = ["server.js"]
 
     it("should return empty instance if file does not exist", async () => {
       const codexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -287,7 +287,7 @@ args = ["server.js"]
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: false,
       });
@@ -314,7 +314,7 @@ args = ["server.js"]
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -352,7 +352,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -363,7 +363,89 @@ fontSize = 14
       expect(json.mcp_servers).toEqual(jsonData.mcpServers);
     });
 
-    it("should create instance from RulesyncMcp with custom baseDir", async () => {
+    it("should preserve per-tool approval_mode decisions on regenerate (#1709)", async () => {
+      // Codex's CLI writes nested `[mcp_servers.<server>.tools.<tool>]` tables
+      // with `approval_mode` when the user approves an MCP tool. rulesync does
+      // not model this, so a regenerate must not wipe these saved approvals.
+      const existingToml = `[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+
+[mcp_servers.playwright.tools.browser_navigate]
+approval_mode = "approve"
+
+[mcp_servers.playwright.tools.browser_click]
+approval_mode = "approve"
+`;
+      await ensureDir(join(testDir, ".codex"));
+      await writeFileContent(join(testDir, ".codex/config.toml"), existingToml);
+
+      const jsonData = {
+        mcpServers: {
+          playwright: {
+            command: "npx",
+            args: ["@playwright/mcp@latest"],
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const servers = codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>;
+      // The rulesync-owned fields are present...
+      expect(servers.playwright?.command).toBe("npx");
+      expect(servers.playwright?.args).toEqual(["@playwright/mcp@latest"]);
+      // ...and the user's saved per-tool approval decisions survive.
+      expect(servers.playwright?.tools).toEqual({
+        browser_navigate: { approval_mode: "approve" },
+        browser_click: { approval_mode: "approve" },
+      });
+    });
+
+    it("does not clobber a rulesync-emitted tools value with the preserved approval table", async () => {
+      // When rulesync itself supplies a `tools` value, rulesync owns it: the
+      // preserved approval table must NOT override it.
+      const existingToml = `[mcp_servers.srv]
+command = "node"
+
+[mcp_servers.srv.tools.some_tool]
+approval_mode = "approve"
+`;
+      await ensureDir(join(testDir, ".codex"));
+      await writeFileContent(join(testDir, ".codex/config.toml"), existingToml);
+
+      const jsonData = {
+        mcpServers: {
+          srv: { command: "node", tools: ["explicit_tool"] },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const servers = codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>;
+      // rulesync's `tools` value wins; the existing approval table is not restored.
+      expect(servers.srv?.tools).toEqual(["explicit_tool"]);
+    });
+
+    it("should create instance from RulesyncMcp with custom outputRoot", async () => {
       const jsonData = {
         mcpServers: {
           "custom-server": {
@@ -376,14 +458,14 @@ fontSize = 14
         },
       };
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify(jsonData),
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -408,7 +490,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         validate: true,
         global: true,
@@ -428,7 +510,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         validate: false,
         global: true,
@@ -448,12 +530,301 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
 
       expect(codexcliMcp.getToml().mcp_servers).toEqual({});
+    });
+
+    // codex CLI rejects empty `[mcp_servers.X.env]` for remote transports
+    // (sse / http / streamable_http) with: "env is not supported for
+    // streamable_http". The recursive `removeEmptyEntries` strip handles all
+    // three transport types uniformly.
+    it.each(["sse", "http", "streamable_http"] as const)(
+      "should strip empty env object from remote (%s) server and preserve other fields",
+      async (transport) => {
+        const jsonData = {
+          mcpServers: {
+            "aws-knowledge": {
+              type: transport,
+              url: "https://knowledge-mcp.global.api.aws",
+              env: {},
+            },
+          },
+        };
+        const rulesyncMcp = new RulesyncMcp({
+          relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+          relativeFilePath: ".mcp.json",
+          fileContent: JSON.stringify(jsonData),
+        });
+
+        const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+          outputRoot: testDir,
+          rulesyncMcp,
+          global: true,
+        });
+
+        const server = (
+          codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+        )?.["aws-knowledge"];
+        expect(server).toBeDefined();
+        expect(server!.env).toBeUndefined();
+        // Defensive: assert non-env fields survive the strip.
+        expect(server!.type).toBe(transport);
+        expect(server!.url).toBe("https://knowledge-mcp.global.api.aws");
+      },
+    );
+
+    it("should strip empty env object from stdio server and preserve other fields", async () => {
+      const jsonData = {
+        mcpServers: {
+          local: {
+            type: "stdio",
+            command: "node",
+            args: ["server.js"],
+            env: {},
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (
+        codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+      )?.["local"];
+      expect(server).toBeDefined();
+      expect(server!.env).toBeUndefined();
+      // Defensive: assert non-env fields survive the strip.
+      expect(server!.command).toBe("node");
+      expect(server!.args).toEqual(["server.js"]);
+    });
+
+    it("should preserve populated env table on stdio server", async () => {
+      const jsonData = {
+        mcpServers: {
+          local: {
+            type: "stdio",
+            command: "node",
+            args: ["server.js"],
+            env: { NODE_ENV: "production" },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (
+        codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+      )?.["local"];
+      expect(server).toBeDefined();
+      expect(server!.env).toEqual({ NODE_ENV: "production" });
+      // Defensive: command/args also survive.
+      expect(server!.command).toBe("node");
+      expect(server!.args).toEqual(["server.js"]);
+    });
+
+    it("should not emit .env] in serialized TOML for server with env: {}", async () => {
+      // The actual failure mode is smol-toml emitting a `[mcp_servers.X.env]`
+      // header that Codex CLI rejects. This test asserts directly on the
+      // serialized TOML string to map to the Codex 0.130+ rejection condition.
+      const jsonData = {
+        mcpServers: {
+          "aws-knowledge": {
+            type: "streamable_http",
+            url: "https://knowledge-mcp.global.api.aws",
+            env: {},
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      expect(codexcliMcp.getFileContent()).not.toContain(".env]");
+    });
+
+    it("should preserve array elements verbatim even when they are empty objects", async () => {
+      // Arrays are not recursed into by removeEmptyEntries. If an array
+      // element is a plain object like `{}`, it survives unmodified so the
+      // empty inline table is preserved in TOML output. This boundary is
+      // intentional: the current mcp_servers.* schema is a map, not an
+      // array, and an empty inline table in TOML (`[{}, "a"]`) differs from
+      // a table header (`[mcp_servers.X.env]`) that Codex CLI rejects.
+      const jsonData = {
+        mcpServers: {
+          local: {
+            type: "stdio",
+            command: "node",
+            args: [{}, { flag: "--verbose" }],
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (
+        codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+      )?.["local"];
+      expect(server).toBeDefined();
+      expect(server!.args).toEqual([{}, { flag: "--verbose" }]);
+    });
+
+    it("should strip prototype-pollution keys at server-name level on outbound conversion", async () => {
+      // Use JSON string so that `__proto__` becomes an own enumerable
+      // property rather than setting the prototype of the object literal.
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: `{
+          "mcpServers": {
+            "__proto__": { "command": "evil" },
+            "constructor": { "command": "evil" },
+            "prototype": { "command": "evil" },
+            "ok": { "type": "stdio", "command": "node", "args": ["server.js"] }
+          }
+        }`,
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const servers = codexcliMcp.getToml().mcp_servers as Record<string, unknown>;
+      expect(Object.hasOwn(servers, "__proto__")).toBe(false);
+      expect(Object.hasOwn(servers, "constructor")).toBe(false);
+      expect(Object.hasOwn(servers, "prototype")).toBe(false);
+      expect(Object.hasOwn(servers, "ok")).toBe(true);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("should strip prototype-pollution keys at config-key level on outbound conversion", async () => {
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: `{
+          "mcpServers": {
+            "local": {
+              "type": "stdio",
+              "command": "node",
+              "args": ["server.js"],
+              "__proto__": "x",
+              "constructor": "x",
+              "prototype": "x"
+            }
+          }
+        }`,
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (
+        codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+      )?.["local"];
+      expect(server).toBeDefined();
+      expect(Object.hasOwn(server!, "__proto__")).toBe(false);
+      expect(Object.hasOwn(server!, "constructor")).toBe(false);
+      expect(Object.hasOwn(server!, "prototype")).toBe(false);
+      expect(server!.command).toBe("node");
+    });
+
+    it("should strip prototype-pollution keys in nested env via removeEmptyEntries", async () => {
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: `{
+          "mcpServers": {
+            "local": {
+              "type": "stdio",
+              "command": "node",
+              "args": ["server.js"],
+              "env": { "__proto__": "x", "NODE_ENV": "production" }
+            }
+          }
+        }`,
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (
+        codexcliMcp.getToml().mcp_servers as Record<string, Record<string, unknown>>
+      )?.["local"];
+      expect(server).toBeDefined();
+      const env = server!.env as Record<string, unknown>;
+      expect(Object.hasOwn(env, "__proto__")).toBe(false);
+      expect(env.NODE_ENV).toBe("production");
+    });
+
+    it("should strip prototype-pollution server-name keys on inbound conversion", () => {
+      // smol-toml installs `__proto__` as an own enumerable data property
+      // (via `Object.defineProperty`), so this round-trip exercises the
+      // `PROTOTYPE_POLLUTION_KEYS.has(name)` guard in convertFromCodexFormat.
+      const tomlContent = `[mcp_servers."__proto__"]
+command = "evil"
+
+[mcp_servers.ok]
+command = "node"
+args = ["server.js"]
+`;
+
+      const codexcliMcp = new CodexcliMcp({
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: tomlContent,
+      });
+
+      const rulesyncMcp = codexcliMcp.toRulesyncMcp();
+      const parsed = JSON.parse(rulesyncMcp.getFileContent()) as {
+        mcpServers: Record<string, unknown>;
+      };
+      expect(Object.hasOwn(parsed.mcpServers, "__proto__")).toBe(false);
+      expect(Object.hasOwn(parsed.mcpServers, "ok")).toBe(true);
     });
 
     it("should convert disabled: true to enabled = false in codex format", async () => {
@@ -473,7 +844,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -500,7 +871,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -527,7 +898,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -555,7 +926,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -563,6 +934,159 @@ fontSize = 14
       const mcpServers = codexcliMcp.getToml().mcp_servers as any;
       expect(mcpServers["my-server"].enabled_tools).toEqual(["search"]);
       expect(mcpServers["my-server"].disabled_tools).toEqual(["delete"]);
+    });
+
+    it("should rename source envVars (camelCase) to codex env_vars (snake_case)", async () => {
+      // The source schema uses `envVars` (camelCase) for consistency with
+      // `enabledTools`/`disabledTools`. The codex generator renames it to
+      // `env_vars` (snake_case) to match codex's native config.toml format.
+      // Source:
+      //   "pal": { ..., "envVars": ["OPENAI_API_KEY", "JIRA_PERSONAL_TOKEN"] }
+      // Output:
+      //   [mcp_servers.pal]
+      //   env_vars = ["OPENAI_API_KEY", "JIRA_PERSONAL_TOKEN"]
+      const jsonData = {
+        mcpServers: {
+          pal: {
+            type: "stdio",
+            command: "uvx",
+            args: ["pal-mcp-server"],
+            envVars: ["OPENAI_API_KEY", "JIRA_PERSONAL_TOKEN"],
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const mcpServers = codexcliMcp.getToml().mcp_servers as any;
+      // Output uses snake_case (codex native).
+      expect(mcpServers.pal.env_vars).toEqual(["OPENAI_API_KEY", "JIRA_PERSONAL_TOKEN"]);
+      // Source key (camelCase) must NOT appear in codex output.
+      expect(mcpServers.pal.envVars).toBeUndefined();
+      // Defensive: other fields survive.
+      expect(mcpServers.pal.command).toBe("uvx");
+      expect(mcpServers.pal.args).toEqual(["pal-mcp-server"]);
+    });
+
+    it("should coexist envVars and env on the same server", async () => {
+      // `envVars` (list of names inherited from shell) and `env` (literal
+      // name→value map) are distinct concepts. Both must serialize correctly
+      // on the same server.
+      const jsonData = {
+        mcpServers: {
+          pal: {
+            type: "stdio",
+            command: "uvx",
+            args: ["pal-mcp-server"],
+            envVars: ["OPENAI_API_KEY"],
+            env: { LOG_LEVEL: "debug" },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (codexcliMcp.getToml().mcp_servers as any).pal;
+      expect(server.env_vars).toEqual(["OPENAI_API_KEY"]);
+      expect(server.env).toEqual({ LOG_LEVEL: "debug" });
+    });
+
+    it("should not leak rulesync-only fields into codex output", async () => {
+      const jsonData = {
+        mcpServers: {
+          pal: {
+            type: "stdio",
+            command: "uvx",
+            args: ["pal-mcp-server"],
+            envVars: ["OPENAI_API_KEY"],
+            targets: ["codexcli"],
+            description: "PAL MCP server",
+            exposed: true,
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const server = (codexcliMcp.getToml().mcp_servers as any).pal;
+      expect(server.env_vars).toEqual(["OPENAI_API_KEY"]);
+      expect(server.targets).toBeUndefined();
+      expect(server.description).toBeUndefined();
+      expect(server.exposed).toBeUndefined();
+    });
+
+    it("should round-trip envVars through codex import", async () => {
+      // codex config.toml → toRulesyncMcp() → rulesync representation must
+      // expose `envVars` in source schema form (camelCase).
+      const tomlContent = `[mcp_servers.pal]
+type = "stdio"
+command = "uvx"
+args = ["pal-mcp-server"]
+env_vars = ["OPENAI_API_KEY"]
+`;
+      const codexcliMcp = new CodexcliMcp({
+        outputRoot: testDir,
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: tomlContent,
+      });
+
+      const rulesyncMcp = codexcliMcp.toRulesyncMcp();
+      const json = JSON.parse(rulesyncMcp.getFileContent());
+
+      expect(json.mcpServers.pal.envVars).toEqual(["OPENAI_API_KEY"]);
+      expect(json.mcpServers.pal.env_vars).toBeUndefined();
+    });
+
+    it("should ignore malformed codex array fields when importing", () => {
+      const tomlContent = `[mcp_servers.pal]
+type = "stdio"
+command = "uvx"
+env_vars = [1, 2, 3]
+enabled_tools = ["read", 2]
+disabled_tools = [false]
+`;
+      const codexcliMcp = new CodexcliMcp({
+        outputRoot: testDir,
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: tomlContent,
+      });
+
+      const rulesyncMcp = codexcliMcp.toRulesyncMcp();
+      const json = JSON.parse(rulesyncMcp.getFileContent());
+
+      expect(json.mcpServers.pal.envVars).toBeUndefined();
+      expect(json.mcpServers.pal.enabledTools).toBeUndefined();
+      expect(json.mcpServers.pal.disabledTools).toBeUndefined();
+      expect(json.mcpServers.pal.command).toBe("uvx");
     });
 
     it("should convert enabledTools/disabledTools for multiple servers", async () => {
@@ -587,7 +1111,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -613,7 +1137,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -644,7 +1168,7 @@ fontSize = 14
       });
 
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -669,7 +1193,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 
       expect(rulesyncMcp).toBeInstanceOf(RulesyncMcp);
       expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
-      expect(rulesyncMcp.getRelativeFilePath()).toBe(".mcp.json");
+      expect(rulesyncMcp.getRelativeFilePath()).toBe("mcp.json");
 
       const json = JSON.parse(rulesyncMcp.getFileContent());
       expect((json.mcpServers as any)?.filesystem).toBeDefined();
@@ -689,7 +1213,7 @@ command = "python"
 args = ["another-server.py"]
 `;
       const codexcliMcp = new CodexcliMcp({
-        baseDir: "/test/dir",
+        outputRoot: "/test/dir",
         relativeDirPath: ".codex",
         relativeFilePath: "config.toml",
         fileContent: tomlContent,
@@ -697,7 +1221,7 @@ args = ["another-server.py"]
 
       const rulesyncMcp = codexcliMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getBaseDir()).toBe("/test/dir");
+      expect(rulesyncMcp.getOutputRoot()).toBe("/test/dir");
 
       const json = JSON.parse(rulesyncMcp.getFileContent());
       expect(json.mcpServers?.["complex-server"]).toEqual({
@@ -971,7 +1495,7 @@ NODE_ENV = "test"
 
       // Step 1: Load from file
       const originalCodexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -980,7 +1504,7 @@ NODE_ENV = "test"
 
       // Step 3: Create new CodexcliMcp from RulesyncMcp
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1012,7 +1536,7 @@ PYTHONPATH = "/app/lib"
 
       // Create CodexcliMcp
       const codexcliMcp = new CodexcliMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".codex",
         relativeFilePath: "config.toml",
         fileContent: complexTomlData,
@@ -1021,7 +1545,7 @@ PYTHONPATH = "/app/lib"
       // Convert to RulesyncMcp and back
       const rulesyncMcp = codexcliMcp.toRulesyncMcp();
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1050,7 +1574,7 @@ fontSize = 14
 
       // Load from file
       const originalCodexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -1059,7 +1583,7 @@ fontSize = 14
 
       // Create new CodexcliMcp from RulesyncMcp (this should preserve existing content)
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1085,7 +1609,7 @@ disabled_tools = ["write"]
 
       // Step 1: Load from file
       const originalCodexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -1099,7 +1623,7 @@ disabled_tools = ["write"]
 
       // Step 3: Convert back to CodexcliMcp
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1121,7 +1645,7 @@ enabled = false
 
       // Step 1: Load from file
       const originalCodexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -1134,7 +1658,7 @@ enabled = false
 
       // Step 3: Convert back to CodexcliMcp
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1170,7 +1694,7 @@ enabled = false
 
       // Step 1: Convert to CodexcliMcp
       const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -1203,7 +1727,7 @@ enabled_tools = ["search"]
 
       // Step 1: Load from local file (no global flag)
       const originalCodexcliMcp = await CodexcliMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: false,
       });
 
@@ -1216,7 +1740,7 @@ enabled_tools = ["search"]
 
       // Step 3: Convert back to CodexcliMcp in local mode
       const newCodexcliMcp = await CodexcliMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: false,
       });
@@ -1224,6 +1748,178 @@ enabled_tools = ["search"]
       expect(newCodexcliMcp.getFilePath()).toBe(join(testDir, ".codex/config.toml"));
       const mcpServers = newCodexcliMcp.getToml().mcp_servers as any;
       expect(mcpServers["local-server"].enabled_tools).toEqual(["search"]);
+    });
+  });
+
+  describe("oauth client id mapping (#2158)", () => {
+    it("duplicates oauth.clientId to snake_case client_id on outbound conversion", async () => {
+      const jsonData = {
+        mcpServers: {
+          slack: {
+            type: "http",
+            url: "https://mcp.slack.com/mcp",
+            oauth: {
+              clientId: "1601185624273.8899143856786",
+              callbackPort: 3118,
+            },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: false,
+      });
+
+      const oauth = (codexcliMcp.getToml().mcp_servers as any).slack.oauth;
+      // Both keys are emitted: camelCase for tools that read it, and snake_case
+      // for Codex CLI's login flow.
+      expect(oauth.client_id).toBe("1601185624273.8899143856786");
+      expect(oauth.clientId).toBe("1601185624273.8899143856786");
+      expect(oauth.callbackPort).toBe(3118);
+    });
+
+    it("does not overwrite an existing client_id", async () => {
+      const jsonData = {
+        mcpServers: {
+          slack: {
+            type: "http",
+            url: "https://mcp.slack.com/mcp",
+            oauth: {
+              clientId: "camel-value",
+              client_id: "snake-value",
+            },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: false,
+      });
+
+      const oauth = (codexcliMcp.getToml().mcp_servers as any).slack.oauth;
+      expect(oauth.client_id).toBe("snake-value");
+    });
+
+    it("collapses client_id back to canonical clientId on inbound conversion", () => {
+      const tomlContent = `[mcp_servers.slack]
+type = "http"
+url = "https://mcp.slack.com/mcp"
+
+[mcp_servers.slack.oauth]
+client_id = "1601185624273.8899143856786"
+callbackPort = 3118
+`;
+      const codexcliMcp = new CodexcliMcp({
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: tomlContent,
+      });
+
+      const json = JSON.parse(codexcliMcp.toRulesyncMcp().getFileContent());
+      expect(json.mcpServers.slack.oauth).toEqual({
+        clientId: "1601185624273.8899143856786",
+        callbackPort: 3118,
+      });
+    });
+
+    it("does not duplicate a non-string clientId", async () => {
+      const jsonData = {
+        mcpServers: {
+          slack: {
+            type: "http",
+            url: "https://mcp.slack.com/mcp",
+            oauth: {
+              // A non-string client id is not a usable OAuth client id, so it is
+              // left as-is rather than duplicated into `client_id`.
+              clientId: 12345,
+            },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      const codexcliMcp = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: false,
+      });
+
+      const oauth = (codexcliMcp.getToml().mcp_servers as any).slack.oauth;
+      expect(oauth.clientId).toBe(12345);
+      expect("client_id" in oauth).toBe(false);
+    });
+
+    it("keeps a full generate → import round-trip stable", async () => {
+      const jsonData = {
+        mcpServers: {
+          slack: {
+            type: "http",
+            url: "https://mcp.slack.com/mcp",
+            oauth: {
+              clientId: "1601185624273.8899143856786",
+              callbackPort: 3118,
+            },
+          },
+        },
+      };
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify(jsonData),
+      });
+
+      // Generate the codex config, then re-parse it as a CodexcliMcp and convert
+      // back to the canonical shape — the OAuth block must collapse back to just
+      // the camelCase clientId.
+      const generated = await CodexcliMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: false,
+      });
+      const reimported = new CodexcliMcp({
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: generated.getFileContent(),
+      });
+
+      const json = JSON.parse(reimported.toRulesyncMcp().getFileContent());
+      expect(json.mcpServers.slack.oauth).toEqual({
+        clientId: "1601185624273.8899143856786",
+        callbackPort: 3118,
+      });
+    });
+
+    it("prefers canonical clientId and drops client_id when both are present on import", () => {
+      const tomlContent = `[mcp_servers.slack.oauth]
+clientId = "camel-value"
+client_id = "camel-value"
+`;
+      const codexcliMcp = new CodexcliMcp({
+        relativeDirPath: ".codex",
+        relativeFilePath: "config.toml",
+        fileContent: tomlContent,
+      });
+
+      const json = JSON.parse(codexcliMcp.toRulesyncMcp().getFileContent());
+      expect(json.mcpServers.slack.oauth).toEqual({ clientId: "camel-value" });
     });
   });
 });

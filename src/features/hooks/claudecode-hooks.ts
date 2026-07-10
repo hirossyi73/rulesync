@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { CLAUDECODE_DIR, CLAUDECODE_SETTINGS_FILE_NAME } from "../../constants/claudecode-paths.js";
 import type { AiFileParams } from "../../types/ai-file.js";
 import type { ValidationResult } from "../../types/ai-file.js";
 import {
@@ -9,6 +10,11 @@ import {
 } from "../../types/hooks.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContentOrNull, readOrInitializeFileContent } from "../../utils/file.js";
+import type { Logger } from "../../utils/logger.js";
+import {
+  applySharedConfigPatch,
+  CLAUDE_SETTINGS_SHARED_FILE_KEY,
+} from "../shared/shared-config-gateway.js";
 import type { RulesyncHooks } from "./rulesync-hooks.js";
 import type { ToolHooksConverterConfig } from "./tool-hooks-converter.js";
 import { canonicalToToolHooks, toolHooksToCanonical } from "./tool-hooks-converter.js";
@@ -20,12 +26,26 @@ import {
   type ToolHooksSettablePaths,
 } from "./tool-hooks.js";
 
+const CLAUDE_NO_MATCHER_EVENTS: ReadonlySet<string> = new Set([
+  "worktreeCreate",
+  "worktreeRemove",
+  "messageDisplay",
+  // Documented as firing on every occurrence with no tool/argument matcher.
+  // @see https://code.claude.com/docs/en/hooks#hook-events
+  "postToolBatch",
+  "taskCreated",
+  "taskCompleted",
+  "teammateIdle",
+  "cwdChanged",
+]);
+
 const CLAUDE_CONVERTER_CONFIG: ToolHooksConverterConfig = {
   supportedEvents: CLAUDE_HOOK_EVENTS,
   canonicalToToolEventNames: CANONICAL_TO_CLAUDE_EVENT_NAMES,
   toolToCanonicalEventNames: CLAUDE_TO_CANONICAL_EVENT_NAMES,
   projectDirVar: "$CLAUDE_PROJECT_DIR",
   prefixDotRelativeCommandsOnly: true,
+  noMatcherEvents: CLAUDE_NO_MATCHER_EVENTS,
 };
 
 export class ClaudecodeHooks extends ToolHooks {
@@ -43,19 +63,19 @@ export class ClaudecodeHooks extends ToolHooks {
   static getSettablePaths(_options: { global?: boolean } = {}): ToolHooksSettablePaths {
     // Currently, both global and project mode use the same paths.
     // The parameter is kept for consistency with other ToolHooks implementations.
-    return { relativeDirPath: ".claude", relativeFilePath: "settings.json" };
+    return { relativeDirPath: CLAUDECODE_DIR, relativeFilePath: CLAUDECODE_SETTINGS_FILE_NAME };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
     global = false,
   }: ToolHooksFromFileParams): Promise<ClaudecodeHooks> {
     const paths = ClaudecodeHooks.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, paths.relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
     const fileContent = (await readFileContentOrNull(filePath)) ?? '{"hooks":{}}';
     return new ClaudecodeHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -64,36 +84,37 @@ export class ClaudecodeHooks extends ToolHooks {
   }
 
   static async fromRulesyncHooks({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncHooks,
     validate = true,
     global = false,
-  }: ToolHooksFromRulesyncHooksParams & { global?: boolean }): Promise<ClaudecodeHooks> {
+    logger,
+  }: ToolHooksFromRulesyncHooksParams & {
+    global?: boolean;
+    logger?: Logger;
+  }): Promise<ClaudecodeHooks> {
     const paths = ClaudecodeHooks.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, paths.relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, paths.relativeFilePath);
     const existingContent = await readOrInitializeFileContent(
       filePath,
       JSON.stringify({}, null, 2),
     );
-    let settings: Record<string, unknown>;
-    try {
-      settings = JSON.parse(existingContent);
-    } catch (error) {
-      throw new Error(
-        `Failed to parse existing Claude settings at ${filePath}: ${formatError(error)}`,
-        { cause: error },
-      );
-    }
     const config = rulesyncHooks.getJson();
     const claudeHooks = canonicalToToolHooks({
       config,
       toolOverrideHooks: config.claudecode?.hooks,
       converterConfig: CLAUDE_CONVERTER_CONFIG,
+      logger,
     });
-    const merged = { ...settings, hooks: claudeHooks };
-    const fileContent = JSON.stringify(merged, null, 2);
+    const fileContent = applySharedConfigPatch({
+      fileKey: CLAUDE_SETTINGS_SHARED_FILE_KEY,
+      feature: "hooks",
+      existingContent,
+      patch: { hooks: claudeHooks },
+      filePath,
+    });
     return new ClaudecodeHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -127,12 +148,12 @@ export class ClaudecodeHooks extends ToolHooks {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolHooksForDeletionParams): ClaudecodeHooks {
     return new ClaudecodeHooks({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: JSON.stringify({ hooks: {} }, null, 2),

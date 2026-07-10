@@ -20,7 +20,9 @@ import {
   writeFileContent,
 } from "../utils/file.js";
 import { stringifyFrontmatter } from "../utils/frontmatter.js";
-import { logger } from "../utils/logger.js";
+import { ConsoleLogger } from "../utils/logger.js";
+
+const logger = new ConsoleLogger({ verbose: false, silent: true });
 
 const maxSkillSizeBytes = 1024 * 1024; // 1MB
 const maxSkillsCount = 1000;
@@ -205,7 +207,7 @@ async function putSkill({
 
     // Create a new RulesyncSkill instance for validation
     const skill = new RulesyncSkill({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName,
       frontmatter,
@@ -303,7 +305,7 @@ const McpSkillFileSchema = z.object({
 /**
  * Schema for skill-related tool parameters
  */
-export const skillToolSchemas = {
+const skillToolSchemas = {
   listSkills: z.object({}),
   getSkill: z.object({
     relativeDirPathFromCwd: z.string(),

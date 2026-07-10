@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { AGENTSMD_SKILLS_DIR_PATH } from "../../constants/agentsmd-paths.js";
 import { SKILL_FILE_NAME } from "../../constants/general.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
@@ -15,15 +16,22 @@ import {
   ToolSkillSettablePaths,
 } from "./tool-skill.js";
 
-export const AgentsSkillsSkillFrontmatterSchema = z.looseObject({
+const AgentsSkillsSkillFrontmatterSchema = z.looseObject({
   name: z.string(),
   description: z.string(),
+  // Optional Agent Skills standard frontmatter. https://agentskills.io/specification
+  license: z.optional(z.string()),
+  // The spec defines `compatibility` as a free-form string (1–500 chars). The
+  // object form is also accepted to stay permissive for existing inputs.
+  compatibility: z.optional(z.union([z.string(), z.looseObject({})])),
+  metadata: z.optional(z.looseObject({})),
+  "allowed-tools": z.optional(z.union([z.string(), z.array(z.string())])),
 });
 
 export type AgentsSkillsSkillFrontmatter = z.infer<typeof AgentsSkillsSkillFrontmatterSchema>;
 
 export type AgentsSkillsSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: AgentsSkillsSkillFrontmatter;
@@ -40,8 +48,8 @@ export type AgentsSkillsSkillParams = {
  */
 export class AgentsSkillsSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".agents", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = AGENTSMD_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -50,7 +58,7 @@ export class AgentsSkillsSkill extends ToolSkill {
     global = false,
   }: AgentsSkillsSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -70,12 +78,13 @@ export class AgentsSkillsSkill extends ToolSkill {
     }
   }
 
-  static getSettablePaths(options?: { global?: boolean }): ToolSkillSettablePaths {
-    if (options?.global) {
-      throw new Error("AgentsSkillsSkill does not support global mode.");
-    }
+  static getSettablePaths(_options?: { global?: boolean }): ToolSkillSettablePaths {
+    // The Agent Skills standard defines `.agents/skills/` (project) and
+    // `~/.agents/skills/` (personal/global). The relative path is the same; the
+    // resolution root (cwd vs. home) is supplied via outputRoot by the processor.
+    // https://agentskills.io/specification
     return {
-      relativeDirPath: join(".agents", "skills"),
+      relativeDirPath: AGENTSMD_SKILLS_DIR_PATH,
     };
   }
 
@@ -111,14 +120,23 @@ export class AgentsSkillsSkill extends ToolSkill {
 
   toRulesyncSkill(): RulesyncSkill {
     const frontmatter = this.getFrontmatter();
+    const agentsskillsSection = {
+      ...(frontmatter.license !== undefined && { license: frontmatter.license }),
+      ...(frontmatter.compatibility !== undefined && { compatibility: frontmatter.compatibility }),
+      ...(frontmatter.metadata !== undefined && { metadata: frontmatter.metadata }),
+      ...(frontmatter["allowed-tools"] !== undefined && {
+        "allowed-tools": frontmatter["allowed-tools"],
+      }),
+    };
     const rulesyncFrontmatter: RulesyncSkillFrontmatterInput = {
       name: frontmatter.name,
       description: frontmatter.description,
       targets: ["*"],
+      ...(Object.keys(agentsskillsSection).length > 0 && { agentsskills: agentsskillsSection }),
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -130,21 +148,32 @@ export class AgentsSkillsSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
   }: ToolSkillFromRulesyncSkillParams): AgentsSkillsSkill {
     const settablePaths = AgentsSkillsSkill.getSettablePaths({ global });
     const rulesyncFrontmatter = rulesyncSkill.getFrontmatter();
+    const agentsskillsSection = rulesyncFrontmatter.agentsskills;
 
     const agentsSkillsFrontmatter: AgentsSkillsSkillFrontmatter = {
       name: rulesyncFrontmatter.name,
       description: rulesyncFrontmatter.description,
+      ...(agentsskillsSection?.license !== undefined && { license: agentsskillsSection.license }),
+      ...(agentsskillsSection?.compatibility !== undefined && {
+        compatibility: agentsskillsSection.compatibility,
+      }),
+      ...(agentsskillsSection?.metadata !== undefined && {
+        metadata: agentsskillsSection.metadata,
+      }),
+      ...(agentsskillsSection?.["allowed-tools"] !== undefined && {
+        "allowed-tools": agentsskillsSection["allowed-tools"],
+      }),
     };
 
-    return new AgentsSkillsSkill({
-      baseDir,
+    return new this({
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rulesyncSkill.getDirName(),
       frontmatter: agentsSkillsFrontmatter,
@@ -168,14 +197,14 @@ export class AgentsSkillsSkill extends ToolSkill {
 
     const result = AgentsSkillsSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
     }
 
-    return new AgentsSkillsSkill({
-      baseDir: loaded.baseDir,
+    return new this({
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -187,14 +216,14 @@ export class AgentsSkillsSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): AgentsSkillsSkill {
     const settablePaths = AgentsSkillsSkill.getSettablePaths({ global });
-    return new AgentsSkillsSkill({
-      baseDir,
+    return new this({
+      outputRoot,
       relativeDirPath: relativeDirPath ?? settablePaths.relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

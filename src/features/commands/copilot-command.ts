@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { COPILOT_PROMPTS_DIR_PATH } from "../../constants/copilot-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContent } from "../../utils/file.js";
@@ -17,6 +18,12 @@ import {
 
 // looseObject preserves unknown keys during parsing (like passthrough in Zod 3)
 export const CopilotCommandFrontmatterSchema = z.looseObject({
+  // `agent` is the current VS Code prompt-file field (values `ask` | `agent` |
+  // `plan` | a custom agent name). See
+  // https://code.visualstudio.com/docs/copilot/customization/prompt-files
+  agent: z.optional(z.string()),
+  // `mode` is the deprecated predecessor of `agent`; still accepted for
+  // backward compatibility and migrated to `agent` on import.
   mode: z.optional(z.string()),
   description: z.optional(z.string()),
 });
@@ -53,7 +60,7 @@ export class CopilotCommand extends ToolCommand {
 
   static getSettablePaths(): ToolCommandSettablePaths {
     return {
-      relativeDirPath: join(".github", "prompts"),
+      relativeDirPath: COPILOT_PROMPTS_DIR_PATH,
     };
   }
 
@@ -66,13 +73,23 @@ export class CopilotCommand extends ToolCommand {
   }
 
   toRulesyncCommand(): RulesyncCommand {
-    const { mode: _mode, description, ...restFields } = this.frontmatter;
+    const { mode, agent, description, ...restFields } = this.frontmatter;
+
+    // Migrate the deprecated `mode` field to `agent`. If both are present, the
+    // explicit `agent` value wins.
+    const resolvedAgent = agent ?? mode;
+
+    const copilotFields = {
+      ...restFields,
+      ...(resolvedAgent !== undefined && { agent: resolvedAgent }),
+    };
 
     const rulesyncFrontmatter: RulesyncCommandFrontmatter = {
       targets: ["*"],
       description,
-      // Preserve extra fields in copilot section (excluding mode which is fixed)
-      ...(Object.keys(restFields).length > 0 && { copilot: restFields }),
+      // Preserve extra copilot-specific fields (including the normalized `agent`;
+      // the deprecated `mode` is dropped in favor of `agent`).
+      ...(Object.keys(copilotFields).length > 0 && { copilot: copilotFields }),
     };
 
     // Strip .prompt.md extension and normalize to .md
@@ -80,7 +97,7 @@ export class CopilotCommand extends ToolCommand {
     const relativeFilePath = originalFilePath.replace(/\.prompt\.md$/, ".md");
 
     return new RulesyncCommand({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -109,7 +126,7 @@ export class CopilotCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
   }: ToolCommandFromRulesyncCommandParams): CopilotCommand {
@@ -131,7 +148,7 @@ export class CopilotCommand extends ToolCommand {
     const relativeFilePath = originalFilePath.replace(/\.md$/, ".prompt.md");
 
     return new CopilotCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: copilotFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
@@ -141,12 +158,12 @@ export class CopilotCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolCommandFromFileParams): Promise<CopilotCommand> {
     const paths = this.getSettablePaths();
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
 
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
@@ -157,7 +174,7 @@ export class CopilotCommand extends ToolCommand {
     }
 
     return new CopilotCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -174,12 +191,12 @@ export class CopilotCommand extends ToolCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): CopilotCommand {
     return new CopilotCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { description: "" },

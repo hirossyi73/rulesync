@@ -2,7 +2,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import {
+  RULESYNC_MCP_SCHEMA_URL,
+  RULESYNC_RELATIVE_DIR_PATH,
+} from "../../constants/rulesync-paths.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
 import { CopilotMcp } from "./copilot-mcp.js";
@@ -45,13 +48,13 @@ describe("CopilotMcp", () => {
       expect(copilotMcp.getFileContent()).toBe(validJsonContent);
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const validJsonContent = JSON.stringify({
         servers: {},
       });
 
       const copilotMcp = new CopilotMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".vscode",
         relativeFilePath: "mcp.json",
         fileContent: validJsonContent,
@@ -153,7 +156,7 @@ describe("CopilotMcp", () => {
       await writeFileContent(join(vscodeDir, "mcp.json"), JSON.stringify(jsonData, null, 2));
 
       const copilotMcp = await CopilotMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(copilotMcp).toBeInstanceOf(CopilotMcp);
@@ -161,7 +164,7 @@ describe("CopilotMcp", () => {
       expect(copilotMcp.getFilePath()).toBe(join(testDir, ".vscode/mcp.json"));
     });
 
-    it("should create instance from file with custom baseDir", async () => {
+    it("should create instance from file with custom outputRoot", async () => {
       const customDir = join(testDir, "custom");
       const vscodeDir = join(customDir, ".vscode");
       await ensureDir(vscodeDir);
@@ -177,7 +180,7 @@ describe("CopilotMcp", () => {
       await writeFileContent(join(vscodeDir, "mcp.json"), JSON.stringify(jsonData));
 
       const copilotMcp = await CopilotMcp.fromFile({
-        baseDir: customDir,
+        outputRoot: customDir,
       });
 
       expect(copilotMcp.getFilePath()).toBe(join(customDir, ".vscode/mcp.json"));
@@ -199,7 +202,7 @@ describe("CopilotMcp", () => {
       await writeFileContent(join(vscodeDir, "mcp.json"), JSON.stringify(jsonData));
 
       const copilotMcp = await CopilotMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: true,
       });
 
@@ -216,7 +219,7 @@ describe("CopilotMcp", () => {
       await writeFileContent(join(vscodeDir, "mcp.json"), JSON.stringify(jsonData));
 
       const copilotMcp = await CopilotMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
 
@@ -226,7 +229,7 @@ describe("CopilotMcp", () => {
     it("should throw error if file does not exist", async () => {
       await expect(
         CopilotMcp.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });
@@ -258,7 +261,7 @@ describe("CopilotMcp", () => {
       expect(copilotMcp.getRelativeFilePath()).toBe("mcp.json");
     });
 
-    it("should create instance from RulesyncMcp with custom baseDir", () => {
+    it("should create instance from RulesyncMcp with custom outputRoot", () => {
       const inputMcpServers = {
         "custom-server": {
           command: "python",
@@ -269,14 +272,14 @@ describe("CopilotMcp", () => {
         },
       };
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify({ mcpServers: inputMcpServers }),
       });
 
       const copilotMcp = CopilotMcp.fromRulesyncMcp({
-        baseDir: "/target/dir",
+        outputRoot: "/target/dir",
         rulesyncMcp,
       });
 
@@ -354,9 +357,12 @@ describe("CopilotMcp", () => {
 
       expect(rulesyncMcp).toBeInstanceOf(RulesyncMcp);
       // Output should have mcpServers key, not servers
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: inputServers });
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: inputServers,
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
       expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
-      expect(rulesyncMcp.getRelativeFilePath()).toBe(".mcp.json");
+      expect(rulesyncMcp.getRelativeFilePath()).toBe("mcp.json");
     });
 
     it("should preserve server data when converting to RulesyncMcp", () => {
@@ -375,7 +381,7 @@ describe("CopilotMcp", () => {
         },
       };
       const copilotMcp = new CopilotMcp({
-        baseDir: "/test/dir",
+        outputRoot: "/test/dir",
         relativeDirPath: ".vscode",
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify({ servers: inputServers }),
@@ -383,8 +389,11 @@ describe("CopilotMcp", () => {
 
       const rulesyncMcp = copilotMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getBaseDir()).toBe("/test/dir");
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: inputServers });
+      expect(rulesyncMcp.getOutputRoot()).toBe("/test/dir");
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: inputServers,
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
     });
 
     it("should handle empty servers object when converting", () => {
@@ -396,7 +405,10 @@ describe("CopilotMcp", () => {
 
       const rulesyncMcp = copilotMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: {} });
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: {},
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
     });
 
     it("should handle missing servers key", () => {
@@ -408,7 +420,10 @@ describe("CopilotMcp", () => {
 
       const rulesyncMcp = copilotMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: {} });
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: {},
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
     });
   });
 
@@ -515,17 +530,20 @@ describe("CopilotMcp", () => {
 
       // Step 1: Load from file (has servers key)
       const originalCopilotMcp = await CopilotMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
       expect(originalCopilotMcp.getJson()).toEqual({ servers: originalServers });
 
       // Step 2: Convert to RulesyncMcp (should have mcpServers key)
       const rulesyncMcp = originalCopilotMcp.toRulesyncMcp();
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: originalServers });
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: originalServers,
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
 
       // Step 3: Create new CopilotMcp from RulesyncMcp (should have servers key again)
       const newCopilotMcp = CopilotMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
       });
 
@@ -556,7 +574,7 @@ describe("CopilotMcp", () => {
 
       // Create CopilotMcp with servers key
       const copilotMcp = new CopilotMcp({
-        baseDir: "/project",
+        outputRoot: "/project",
         relativeDirPath: ".vscode",
         relativeFilePath: "mcp.json",
         fileContent: JSON.stringify({ servers: originalServers }),
@@ -565,10 +583,13 @@ describe("CopilotMcp", () => {
       // Convert to RulesyncMcp and back
       const rulesyncMcp = copilotMcp.toRulesyncMcp();
       // RulesyncMcp should have mcpServers key
-      expect(rulesyncMcp.getJson()).toEqual({ mcpServers: originalServers });
+      expect(rulesyncMcp.getJson()).toEqual({
+        mcpServers: originalServers,
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+      });
 
       const newCopilotMcp = CopilotMcp.fromRulesyncMcp({
-        baseDir: "/project",
+        outputRoot: "/project",
         rulesyncMcp,
       });
 

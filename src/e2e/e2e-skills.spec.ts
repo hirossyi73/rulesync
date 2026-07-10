@@ -3,25 +3,196 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../constants/rulesync-paths.js";
-import { readFileContent, writeFileContent } from "../utils/file.js";
-import { runGenerate, useGlobalTestDirectories, useTestDirectory } from "./e2e-helper.js";
+import { SkillsProcessor } from "../features/skills/skills-processor.js";
+import { fileExists, readFileContent, writeFileContent } from "../utils/file.js";
+import {
+  assertGenerateMatrixCoversTargets,
+  runGenerate,
+  runImport,
+  useGlobalTestDirectories,
+  useTestDirectory,
+} from "./e2e-helper.js";
+
+// One SKILL.md per tool skill directory.
+const skillsGenerateTargets = [
+  {
+    target: "augmentcode",
+    outputPath: join(".augment", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "claudecode",
+    outputPath: join(".claude", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "cursor",
+    outputPath: join(".cursor", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "codexcli",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "grokcli",
+    outputPath: join(".grok", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "goose",
+    outputPath: join(".goose", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "qwencode",
+    outputPath: join(".qwen", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "copilot",
+    outputPath: join(".github", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "copilotcli",
+    outputPath: join(".github", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "deepagents",
+    outputPath: join(".deepagents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "cline",
+    outputPath: join(".cline", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kilo",
+    outputPath: join(".kilo", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "roo",
+    outputPath: join(".roo", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "rovodev",
+    outputPath: join(".rovodev", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "devin",
+    outputPath: join(".devin", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "warp",
+    outputPath: join(".warp", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kiro",
+    outputPath: join(".kiro", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "antigravity-ide",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "antigravity-cli",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "junie",
+    outputPath: join(".junie", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "replit",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "agentsskills",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "aiassistant",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "amp",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "takt",
+    outputPath: join(".takt", "facets", "knowledge", "test-skill.md"),
+  },
+  {
+    target: "pi",
+    outputPath: join(".pi", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "zed",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "factorydroid",
+    outputPath: join(".factory", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "vibe",
+    outputPath: join(".vibe", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "opencode",
+    outputPath: join(".opencode", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kiro-cli",
+    outputPath: join(".kiro", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kiro-ide",
+    outputPath: join(".kiro", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "reasonix",
+    outputPath: join(".reasonix", "skills", "test-skill", "SKILL.md"),
+  },
+] as const;
 
 describe("E2E: skills", () => {
   const { getTestDir } = useTestDirectory();
 
+  it("generate matrix must cover every native skills tool target", () => {
+    // agentsmd is a simulated-only target (excluded from native getToolTargets),
+    // so it is exercised by the dedicated simulated-skills matrix instead.
+    assertGenerateMatrixCoversTargets({
+      processor: SkillsProcessor,
+      testedTargets: skillsGenerateTargets.map((e) => e.target),
+    });
+  });
+
+  it.each(skillsGenerateTargets)(
+    "should generate $target skills",
+    async ({ target, outputPath }) => {
+      const testDir = getTestDir();
+
+      const skillContent = `---
+name: test-skill
+description: "A test skill for E2E testing"
+targets: ["*"]
+---
+This is the test skill body content.
+`;
+      await writeFileContent(
+        join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "test-skill", "SKILL.md"),
+        skillContent,
+      );
+
+      await runGenerate({ target, features: "skills" });
+
+      const generatedContent = await readFileContent(join(testDir, outputPath));
+      expect(generatedContent).toContain("test skill body content");
+    },
+  );
+
   it.each([
     {
-      target: "claudecode",
-      outputPath: join(".claude", "skills", "test-skill", "SKILL.md"),
+      target: "agentsmd",
+      outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
     },
-    {
-      target: "cursor",
-      outputPath: join(".cursor", "skills", "test-skill", "SKILL.md"),
-    },
-  ])("should generate $target skills", async ({ target, outputPath }) => {
+  ])("should generate $target simulated skills", async ({ target, outputPath }) => {
     const testDir = getTestDir();
 
-    // Setup: Create .rulesync/skills/test-skill/SKILL.md
     const skillContent = `---
 name: test-skill
 description: "A test skill for E2E testing"
@@ -34,37 +205,284 @@ This is the test skill body content.
       skillContent,
     );
 
-    // Execute: Generate skills for the target
-    await runGenerate({ target, features: "skills" });
+    await runGenerate({ target, features: "skills", simulateSkills: true });
 
-    // Verify that the expected output file was generated
     const generatedContent = await readFileContent(join(testDir, outputPath));
     expect(generatedContent).toContain("test skill body content");
   });
+
+  it.each([
+    { target: "claudecode", orphanPath: join(".claude", "skills", "orphan-skill", "SKILL.md") },
+    { target: "cursor", orphanPath: join(".cursor", "skills", "orphan-skill", "SKILL.md") },
+    { target: "codexcli", orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "copilot", orphanPath: join(".github", "skills", "orphan-skill", "SKILL.md") },
+    { target: "deepagents", orphanPath: join(".deepagents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "cline", orphanPath: join(".cline", "skills", "orphan-skill", "SKILL.md") },
+    { target: "kilo", orphanPath: join(".kilo", "skills", "orphan-skill", "SKILL.md") },
+    { target: "roo", orphanPath: join(".roo", "skills", "orphan-skill", "SKILL.md") },
+    { target: "rovodev", orphanPath: join(".rovodev", "skills", "orphan-skill", "SKILL.md") },
+    { target: "devin", orphanPath: join(".devin", "skills", "orphan-skill", "SKILL.md") },
+    { target: "warp", orphanPath: join(".warp", "skills", "orphan-skill", "SKILL.md") },
+    { target: "kiro", orphanPath: join(".kiro", "skills", "orphan-skill", "SKILL.md") },
+    {
+      target: "antigravity-ide",
+      orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md"),
+    },
+    {
+      target: "antigravity-cli",
+      orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md"),
+    },
+    { target: "junie", orphanPath: join(".junie", "skills", "orphan-skill", "SKILL.md") },
+    { target: "replit", orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "agentsskills", orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "aiassistant", orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "pi", orphanPath: join(".pi", "skills", "orphan-skill", "SKILL.md") },
+    { target: "zed", orphanPath: join(".agents", "skills", "orphan-skill", "SKILL.md") },
+    { target: "factorydroid", orphanPath: join(".factory", "skills", "orphan-skill", "SKILL.md") },
+    { target: "vibe", orphanPath: join(".vibe", "skills", "orphan-skill", "SKILL.md") },
+  ])(
+    "should fail in check mode when delete would remove an orphan $target skill file",
+    async ({ target, orphanPath }) => {
+      const testDir = getTestDir();
+
+      await writeFileContent(join(testDir, ".rulesync", ".gitkeep"), "");
+      await writeFileContent(join(testDir, orphanPath), "# orphan\n");
+
+      await expect(
+        runGenerate({
+          target,
+          features: "skills",
+          deleteFiles: true,
+          check: true,
+          env: { NODE_ENV: "e2e" },
+        }),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining(
+          "Files are not up to date. Run 'rulesync generate' to update.",
+        ),
+      });
+
+      expect(await readFileContent(join(testDir, orphanPath))).toBe("# orphan\n");
+    },
+  );
 });
+
+describe("E2E: skills (import)", () => {
+  const { getTestDir } = useTestDirectory();
+
+  it.each([
+    { target: "claudecode", sourcePath: join(".claude", "skills", "test-skill", "SKILL.md") },
+    { target: "cursor", sourcePath: join(".cursor", "skills", "test-skill", "SKILL.md") },
+    { target: "codexcli", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "copilot", sourcePath: join(".github", "skills", "test-skill", "SKILL.md") },
+    { target: "opencode", sourcePath: join(".opencode", "skill", "test-skill", "SKILL.md") },
+    { target: "deepagents", sourcePath: join(".deepagents", "skills", "test-skill", "SKILL.md") },
+    { target: "cline", sourcePath: join(".cline", "skills", "test-skill", "SKILL.md") },
+    { target: "kilo", sourcePath: join(".kilo", "skills", "test-skill", "SKILL.md") },
+    { target: "roo", sourcePath: join(".roo", "skills", "test-skill", "SKILL.md") },
+    { target: "rovodev", sourcePath: join(".rovodev", "skills", "test-skill", "SKILL.md") },
+    { target: "devin", sourcePath: join(".devin", "skills", "test-skill", "SKILL.md") },
+    { target: "warp", sourcePath: join(".warp", "skills", "test-skill", "SKILL.md") },
+    { target: "kiro", sourcePath: join(".kiro", "skills", "test-skill", "SKILL.md") },
+    { target: "antigravity-ide", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "antigravity-cli", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "junie", sourcePath: join(".junie", "skills", "test-skill", "SKILL.md") },
+    { target: "aiassistant", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "replit", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "pi", sourcePath: join(".pi", "skills", "test-skill", "SKILL.md") },
+    { target: "zed", sourcePath: join(".agents", "skills", "test-skill", "SKILL.md") },
+    { target: "factorydroid", sourcePath: join(".factory", "skills", "test-skill", "SKILL.md") },
+    { target: "vibe", sourcePath: join(".vibe", "skills", "test-skill", "SKILL.md") },
+  ])("should import $target skills", async ({ target, sourcePath }) => {
+    const testDir = getTestDir();
+
+    const skillContent = `---
+name: test-skill
+description: "A test skill for E2E testing"
+---
+This is the test skill body content.`;
+    await writeFileContent(join(testDir, sourcePath), skillContent);
+
+    await runImport({ target, features: "skills" });
+
+    const importedContent = await readFileContent(
+      join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "test-skill", "SKILL.md"),
+    );
+    expect(importedContent).toContain("test skill body content");
+  });
+
+  it("should import vibe skills from the .agents/skills fallback root", async () => {
+    const testDir = getTestDir();
+
+    const skillContent = `---
+name: fallback-skill
+description: "A fallback Vibe skill"
+---
+This is the fallback skill body content.`;
+    await writeFileContent(
+      join(testDir, ".agents", "skills", "fallback-skill", "SKILL.md"),
+      skillContent,
+    );
+
+    await runImport({ target: "vibe", features: "skills" });
+
+    const importedContent = await readFileContent(
+      join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "fallback-skill", "SKILL.md"),
+    );
+    expect(importedContent).toContain("fallback skill body content");
+  });
+});
+
+// Skills written under the pseudo-home dir.
+const skillsGlobalTargets = [
+  {
+    target: "augmentcode",
+    outputPath: join(".augment", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "claudecode",
+    outputPath: join(".claude", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "cursor",
+    outputPath: join(".cursor", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "opencode",
+    outputPath: join(".config", "opencode", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "agentsskills",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "amp",
+    outputPath: join(".config", "agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "deepagents",
+    outputPath: join(".deepagents", "deepagents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "codexcli",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "copilot",
+    outputPath: join(".copilot", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "copilotcli",
+    outputPath: join(".copilot", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "grokcli",
+    outputPath: join(".grok", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "qwencode",
+    outputPath: join(".qwen", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "junie",
+    outputPath: join(".junie", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "cline",
+    outputPath: join(".cline", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kilo",
+    outputPath: join(".kilo", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "roo",
+    outputPath: join(".roo", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "rovodev",
+    outputPath: join(".rovodev", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "devin",
+    outputPath: join(".config", "devin", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "warp",
+    outputPath: join(".warp", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "antigravity-ide",
+    outputPath: join(".gemini", "config", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "antigravity-cli",
+    outputPath: join(".gemini", "antigravity-cli", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "takt",
+    outputPath: join(".takt", "facets", "knowledge", "test-skill.md"),
+  },
+  {
+    target: "pi",
+    outputPath: join(".pi", "agent", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "replit",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "zed",
+    outputPath: join(".agents", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "factorydroid",
+    outputPath: join(".factory", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "vibe",
+    outputPath: join(".vibe", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    // Hermes Agent reads skills from ~/.hermes/skills/ (global only).
+    target: "hermesagent",
+    outputPath: join(".hermes", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    // Kiro reads global skills from ~/.kiro/skills/.
+    target: "kiro-cli",
+    outputPath: join(".kiro", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    target: "kiro-ide",
+    outputPath: join(".kiro", "skills", "test-skill", "SKILL.md"),
+  },
+  {
+    // Reasonix reads global skills from ~/.reasonix/skills/.
+    target: "reasonix",
+    outputPath: join(".reasonix", "skills", "test-skill", "SKILL.md"),
+  },
+] as const;
 
 describe("E2E: skills (global mode)", () => {
   const { getProjectDir, getHomeDir } = useGlobalTestDirectories();
 
-  it.each([
-    {
-      target: "claudecode",
-      outputPath: join(".claude", "skills", "test-skill", "SKILL.md"),
-    },
-    {
-      target: "cursor",
-      outputPath: join(".cursor", "skills", "test-skill", "SKILL.md"),
-    },
-    {
-      target: "opencode",
-      outputPath: join(".config", "opencode", "skill", "test-skill", "SKILL.md"),
-    },
-  ])("should generate $target skills in home directory", async ({ target, outputPath }) => {
-    const projectDir = getProjectDir();
-    const homeDir = getHomeDir();
+  it("global matrix must cover every native global skills tool target", () => {
+    assertGenerateMatrixCoversTargets({
+      processor: SkillsProcessor,
+      testedTargets: skillsGlobalTargets.map((e) => e.target),
+      global: true,
+    });
+  });
 
-    // Setup: Create .rulesync/skills/test-skill/SKILL.md with root: true
-    const skillContent = `---
+  it.each(skillsGlobalTargets)(
+    "should generate $target skills in home directory",
+    async ({ target, outputPath }) => {
+      const projectDir = getProjectDir();
+      const homeDir = getHomeDir();
+
+      const skillContent = `---
 root: true
 name: test-skill
 description: "A test skill for E2E testing"
@@ -72,23 +490,22 @@ targets: ["*"]
 ---
 This is the test skill body content.
 `;
-    await writeFileContent(
-      join(projectDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "test-skill", "SKILL.md"),
-      skillContent,
-    );
+      await writeFileContent(
+        join(projectDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "test-skill", "SKILL.md"),
+        skillContent,
+      );
 
-    // Execute: Generate skills in global mode with HOME pointed to temp dir
-    await runGenerate({
-      target,
-      features: "skills",
-      global: true,
-      env: { HOME_DIR: homeDir },
-    });
+      await runGenerate({
+        target,
+        features: "skills",
+        global: true,
+        env: { HOME_DIR: homeDir },
+      });
 
-    // Verify that the expected output file was generated
-    const generatedContent = await readFileContent(join(homeDir, outputPath));
-    expect(generatedContent).toContain("test skill body content");
-  });
+      const generatedContent = await readFileContent(join(homeDir, outputPath));
+      expect(generatedContent).toContain("test skill body content");
+    },
+  );
 
   it("should ignore non-root skills in global mode", async () => {
     const projectDir = getProjectDir();
@@ -133,5 +550,94 @@ Non-root skill body
     );
     expect(generatedContent).toContain("Root skill body");
     expect(generatedContent).not.toContain("Non-root skill body");
+  });
+});
+
+describe("E2E: skills (claudecode scheduled-task)", () => {
+  const { getTestDir } = useTestDirectory();
+
+  it("should route claudecode scheduled-task skills to .claude/scheduled-tasks/", async () => {
+    const testDir = getTestDir();
+
+    const skillContent = `---
+name: weekly-review
+description: "A scheduled-task skill for E2E testing"
+targets: ["*"]
+claudecode:
+  scheduled-task: true
+---
+This is the scheduled task body content.
+`;
+    await writeFileContent(
+      join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "weekly-review", "SKILL.md"),
+      skillContent,
+    );
+
+    await runGenerate({ target: "claudecode", features: "skills" });
+
+    const generatedContent = await readFileContent(
+      join(testDir, ".claude", "scheduled-tasks", "weekly-review", "SKILL.md"),
+    );
+    expect(generatedContent).toContain("scheduled task body content");
+
+    expect(await fileExists(join(testDir, ".claude", "skills", "weekly-review", "SKILL.md"))).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    {
+      target: "cursor",
+      excludedPath: join(".cursor", "skills", "weekly-review", "SKILL.md"),
+    },
+    {
+      target: "copilot",
+      excludedPath: join(".github", "skills", "weekly-review", "SKILL.md"),
+    },
+  ])(
+    "should not emit claudecode scheduled-task skills to $target even with targets: ['*']",
+    async ({ target, excludedPath }) => {
+      const testDir = getTestDir();
+
+      const skillContent = `---
+name: weekly-review
+description: "A scheduled-task skill for E2E testing"
+targets: ["*"]
+claudecode:
+  scheduled-task: true
+---
+This is the scheduled task body content.
+`;
+      await writeFileContent(
+        join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "weekly-review", "SKILL.md"),
+        skillContent,
+      );
+
+      await runGenerate({ target, features: "skills" });
+
+      expect(await fileExists(join(testDir, excludedPath))).toBe(false);
+    },
+  );
+
+  it("should import claudecode skills from .claude/scheduled-tasks/ with scheduled-task flag", async () => {
+    const testDir = getTestDir();
+
+    const skillContent = `---
+name: weekly-review
+description: "A scheduled-task skill for E2E testing"
+---
+This is the scheduled task body content.`;
+    await writeFileContent(
+      join(testDir, ".claude", "scheduled-tasks", "weekly-review", "SKILL.md"),
+      skillContent,
+    );
+
+    await runImport({ target: "claudecode", features: "skills" });
+
+    const importedContent = await readFileContent(
+      join(testDir, RULESYNC_SKILLS_RELATIVE_DIR_PATH, "weekly-review", "SKILL.md"),
+    );
+    expect(importedContent).toContain("scheduled task body content");
+    expect(importedContent).toContain("scheduled-task: true");
   });
 });

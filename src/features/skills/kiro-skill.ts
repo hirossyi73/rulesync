@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod/mini";
 
 import { SKILL_FILE_NAME } from "../../constants/general.js";
+import { KIRO_SKILLS_DIR_PATH } from "../../constants/kiro-paths.js";
 import { RULESYNC_SKILLS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { ValidationResult } from "../../types/ai-dir.js";
 import { formatError } from "../../utils/error.js";
@@ -23,7 +24,7 @@ const KiroSkillFrontmatterSchema = z.looseObject({
 type KiroSkillFrontmatter = z.infer<typeof KiroSkillFrontmatterSchema>;
 
 type KiroSkillParams = {
-  baseDir?: string;
+  outputRoot?: string;
   relativeDirPath?: string;
   dirName: string;
   frontmatter: KiroSkillFrontmatter;
@@ -39,8 +40,8 @@ type KiroSkillParams = {
  */
 export class KiroSkill extends ToolSkill {
   constructor({
-    baseDir = process.cwd(),
-    relativeDirPath = join(".kiro", "skills"),
+    outputRoot = process.cwd(),
+    relativeDirPath = KIRO_SKILLS_DIR_PATH,
     dirName,
     frontmatter,
     body,
@@ -49,7 +50,7 @@ export class KiroSkill extends ToolSkill {
     global = false,
   }: KiroSkillParams) {
     super({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       dirName,
       mainFile: {
@@ -69,12 +70,13 @@ export class KiroSkill extends ToolSkill {
     }
   }
 
-  static getSettablePaths(options?: { global?: boolean }): ToolSkillSettablePaths {
-    if (options?.global) {
-      throw new Error("KiroSkill does not support global mode.");
-    }
+  static getSettablePaths(_options?: { global?: boolean }): ToolSkillSettablePaths {
+    // Kiro reads skills from `.kiro/skills/` (workspace) and `~/.kiro/skills/`
+    // (global). Both scopes share the same relative path; the home-directory
+    // root is applied by the generate pipeline in global mode.
+    // https://kiro.dev/docs/skills/
     return {
-      relativeDirPath: join(".kiro", "skills"),
+      relativeDirPath: KIRO_SKILLS_DIR_PATH,
     };
   }
 
@@ -126,7 +128,7 @@ export class KiroSkill extends ToolSkill {
     };
 
     return new RulesyncSkill({
-      baseDir: this.baseDir,
+      outputRoot: this.outputRoot,
       relativeDirPath: RULESYNC_SKILLS_RELATIVE_DIR_PATH,
       dirName: this.getDirName(),
       frontmatter: rulesyncFrontmatter,
@@ -138,7 +140,7 @@ export class KiroSkill extends ToolSkill {
   }
 
   static fromRulesyncSkill({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSkill,
     validate = true,
     global = false,
@@ -152,7 +154,7 @@ export class KiroSkill extends ToolSkill {
     };
 
     return new KiroSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: settablePaths.relativeDirPath,
       dirName: rulesyncSkill.getDirName(),
       frontmatter: kiroFrontmatter,
@@ -176,7 +178,7 @@ export class KiroSkill extends ToolSkill {
 
     const result = KiroSkillFrontmatterSchema.safeParse(loaded.frontmatter);
     if (!result.success) {
-      const skillDirPath = join(loaded.baseDir, loaded.relativeDirPath, loaded.dirName);
+      const skillDirPath = join(loaded.outputRoot, loaded.relativeDirPath, loaded.dirName);
       throw new Error(
         `Invalid frontmatter in ${join(skillDirPath, SKILL_FILE_NAME)}: ${formatError(result.error)}`,
       );
@@ -184,7 +186,7 @@ export class KiroSkill extends ToolSkill {
 
     if (result.data.name !== loaded.dirName) {
       const skillFilePath = join(
-        loaded.baseDir,
+        loaded.outputRoot,
         loaded.relativeDirPath,
         loaded.dirName,
         SKILL_FILE_NAME,
@@ -195,7 +197,7 @@ export class KiroSkill extends ToolSkill {
     }
 
     return new KiroSkill({
-      baseDir: loaded.baseDir,
+      outputRoot: loaded.outputRoot,
       relativeDirPath: loaded.relativeDirPath,
       dirName: loaded.dirName,
       frontmatter: result.data,
@@ -207,14 +209,14 @@ export class KiroSkill extends ToolSkill {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     dirName,
     global = false,
   }: ToolSkillForDeletionParams): KiroSkill {
     const settablePaths = KiroSkill.getSettablePaths({ global });
     return new KiroSkill({
-      baseDir,
+      outputRoot,
       relativeDirPath: relativeDirPath ?? settablePaths.relativeDirPath,
       dirName,
       frontmatter: { name: "", description: "" },

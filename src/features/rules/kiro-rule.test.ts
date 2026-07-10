@@ -9,8 +9,75 @@ import {
 } from "../../constants/rulesync-paths.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
 import { ensureDir, writeFileContent } from "../../utils/file.js";
-import { KiroRule } from "./kiro-rule.js";
+import { deriveKiroInclusion, KiroRule } from "./kiro-rule.js";
 import { RulesyncRule } from "./rulesync-rule.js";
+
+describe("deriveKiroInclusion", () => {
+  it("returns undefined when there are no globs (always-on, plain file)", () => {
+    expect(deriveKiroInclusion({ globs: [] })).toBeUndefined();
+    expect(deriveKiroInclusion({})).toBeUndefined();
+  });
+
+  it("treats wildcard globs as always-on (undefined)", () => {
+    expect(deriveKiroInclusion({ globs: ["**/*"] })).toBeUndefined();
+    expect(deriveKiroInclusion({ globs: ["*", "**"] })).toBeUndefined();
+  });
+
+  it("maps a single specific glob to fileMatch with a string pattern", () => {
+    expect(deriveKiroInclusion({ globs: ["src/components/**/*.tsx"] })).toEqual({
+      inclusion: "fileMatch",
+      fileMatchPattern: "src/components/**/*.tsx",
+    });
+  });
+
+  it("maps multiple specific globs to fileMatch with an array pattern (dropping wildcards)", () => {
+    expect(deriveKiroInclusion({ globs: ["a/**", "b/**", "**/*"] })).toEqual({
+      inclusion: "fileMatch",
+      fileMatchPattern: ["a/**", "b/**"],
+    });
+  });
+
+  it("honors an explicit kiro.inclusion block", () => {
+    expect(deriveKiroInclusion({ kiro: { inclusion: "manual" }, globs: ["x/**"] })).toEqual({
+      inclusion: "manual",
+    });
+    expect(deriveKiroInclusion({ kiro: { inclusion: "always" } })).toEqual({
+      inclusion: "always",
+    });
+  });
+
+  it("derives fileMatchPattern from globs when kiro.inclusion is fileMatch without a pattern", () => {
+    expect(
+      deriveKiroInclusion({ kiro: { inclusion: "fileMatch" }, globs: ["lib/**/*.ts"] }),
+    ).toEqual({ inclusion: "fileMatch", fileMatchPattern: "lib/**/*.ts" });
+    expect(
+      deriveKiroInclusion({
+        kiro: { inclusion: "fileMatch", fileMatchPattern: "explicit/**" },
+        globs: ["ignored/**"],
+      }),
+    ).toEqual({ inclusion: "fileMatch", fileMatchPattern: "explicit/**" });
+  });
+
+  it("carries name/description through for inclusion: auto", () => {
+    expect(
+      deriveKiroInclusion({
+        kiro: {
+          inclusion: "auto",
+          name: "api-design",
+          description: "REST API design patterns. Use when creating or modifying API endpoints.",
+        },
+      }),
+    ).toEqual({
+      inclusion: "auto",
+      name: "api-design",
+      description: "REST API design patterns. Use when creating or modifying API endpoints.",
+    });
+  });
+
+  it("emits inclusion: auto without companions when they are omitted", () => {
+    expect(deriveKiroInclusion({ kiro: { inclusion: "auto" } })).toEqual({ inclusion: "auto" });
+  });
+});
 
 describe("KiroRule", () => {
   let testDir: string;
@@ -42,9 +109,9 @@ describe("KiroRule", () => {
       );
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const kiroRule = new KiroRule({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".kiro/steering",
         relativeFilePath: "structure.md",
         fileContent: "# Structure Guidelines",
@@ -118,7 +185,7 @@ describe("KiroRule", () => {
       await writeFileContent(join(steeringDir, "product.md"), testContent);
 
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "product.md",
       });
 
@@ -137,7 +204,7 @@ describe("KiroRule", () => {
       await writeFileContent(join(steeringDir, "structure.md"), testContent);
 
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "structure.md",
       });
 
@@ -156,7 +223,7 @@ describe("KiroRule", () => {
       await writeFileContent(join(steeringDir, "tech.md"), testContent);
 
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "tech.md",
       });
 
@@ -167,12 +234,12 @@ describe("KiroRule", () => {
       expect(kiroRule.isRoot()).toBe(false);
     });
 
-    it("should use default baseDir when not provided", async () => {
+    it("should use default outputRoot when not provided", async () => {
       // Setup test file in test directory's .kiro/steering
-      // Since process.cwd() is mocked to return testDir, the default baseDir will use testDir
+      // Since process.cwd() is mocked to return testDir, the default outputRoot will use testDir
       const steeringDir = join(testDir, ".kiro/steering");
       await ensureDir(steeringDir);
-      const testContent = "# Default BaseDir Test";
+      const testContent = "# Default OutputRoot Test";
       await writeFileContent(join(steeringDir, "product.md"), testContent);
 
       const kiroRule = await KiroRule.fromFile({
@@ -192,13 +259,13 @@ describe("KiroRule", () => {
       await writeFileContent(join(steeringDir, "product.md"), testContent);
 
       const kiroRuleWithValidation = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "product.md",
         validate: true,
       });
 
       const kiroRuleWithoutValidation = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "product.md",
         validate: false,
       });
@@ -210,7 +277,7 @@ describe("KiroRule", () => {
     it("should throw error when file does not exist", async () => {
       await expect(
         KiroRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "nonexistent.md",
         }),
       ).rejects.toThrow();
@@ -224,7 +291,7 @@ describe("KiroRule", () => {
       await writeFileContent(join(nestedDir, "nested-product.md"), testContent);
 
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "nested/nested-product.md",
       });
 
@@ -285,7 +352,168 @@ describe("KiroRule", () => {
       expect(kiroRule.isRoot()).toBe(false);
     });
 
-    it("should use custom baseDir", () => {
+    it("emits fileMatch inclusion frontmatter for a non-root rule with specific globs", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "frontend.md",
+        frontmatter: {
+          root: false,
+          targets: ["kiro"],
+          description: "Frontend rule",
+          globs: ["src/components/**/*.tsx"],
+        },
+        body: "# Frontend\n\nUse functional components.",
+      });
+
+      const kiroRule = KiroRule.fromRulesyncRule({ rulesyncRule });
+      const content = kiroRule.getFileContent();
+
+      expect(content).toContain("inclusion: fileMatch");
+      expect(content).toContain("fileMatchPattern: src/components/**/*.tsx");
+      expect(content).toContain("# Frontend\n\nUse functional components.");
+    });
+
+    it("emits no frontmatter for a non-root rule without globs (always-on)", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "general.md",
+        frontmatter: {
+          root: false,
+          targets: ["kiro"],
+          description: "General rule",
+          globs: [],
+        },
+        body: "# General\n\nBe consistent.",
+      });
+
+      const kiroRule = KiroRule.fromRulesyncRule({ rulesyncRule });
+
+      expect(kiroRule.getFileContent()).toBe("# General\n\nBe consistent.");
+    });
+
+    it("round-trips a fileMatch rule through toRulesyncRule", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "frontend.md",
+        frontmatter: {
+          root: false,
+          targets: ["kiro"],
+          globs: ["src/**/*.ts"],
+        },
+        body: "# Frontend body",
+      });
+
+      const generated = KiroRule.fromRulesyncRule({ rulesyncRule });
+      const roundTrip = generated.toRulesyncRule();
+
+      expect(roundTrip.getFrontmatter().globs).toEqual(["src/**/*.ts"]);
+      expect(roundTrip.getFrontmatter().kiro).toEqual({
+        inclusion: "fileMatch",
+        fileMatchPattern: "src/**/*.ts",
+      });
+      expect(roundTrip.getBody()).toContain("# Frontend body");
+    });
+
+    it("emits and round-trips an array fileMatchPattern for multiple globs", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "ts.md",
+        frontmatter: {
+          root: false,
+          targets: ["kiro"],
+          globs: ["**/*.ts", "**/*.tsx"],
+        },
+        body: "# TS body",
+      });
+
+      const generated = KiroRule.fromRulesyncRule({ rulesyncRule });
+      const content = generated.getFileContent();
+      expect(content).toContain("inclusion: fileMatch");
+      // YAML array form, not a comma-joined string.
+      expect(content).not.toContain("**/*.ts,**/*.tsx");
+
+      const roundTrip = generated.toRulesyncRule();
+      expect(roundTrip.getFrontmatter().globs).toEqual(["**/*.ts", "**/*.tsx"]);
+      expect(roundTrip.getFrontmatter().kiro).toEqual({
+        inclusion: "fileMatch",
+        fileMatchPattern: ["**/*.ts", "**/*.tsx"],
+      });
+    });
+
+    it("imports a hand-authored array fileMatchPattern steering file", async () => {
+      const steeringDir = join(testDir, ".kiro/steering");
+      await ensureDir(steeringDir);
+      await writeFileContent(
+        join(steeringDir, "authored.md"),
+        '---\ninclusion: fileMatch\nfileMatchPattern: ["**/*.ts", "**/*.tsx"]\n---\n# Authored\n',
+      );
+
+      const kiroRule = await KiroRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "authored.md",
+      });
+      const roundTrip = kiroRule.toRulesyncRule();
+
+      expect(roundTrip.getFrontmatter().globs).toEqual(["**/*.ts", "**/*.tsx"]);
+      expect(roundTrip.getFrontmatter().kiro).toEqual({
+        inclusion: "fileMatch",
+        fileMatchPattern: ["**/*.ts", "**/*.tsx"],
+      });
+      expect(roundTrip.getBody()).toContain("# Authored");
+    });
+
+    it("imports a hand-authored auto-inclusion steering file, round-tripping name/description", async () => {
+      const steeringDir = join(testDir, ".kiro/steering");
+      await ensureDir(steeringDir);
+      await writeFileContent(
+        join(steeringDir, "api-design.md"),
+        "---\ninclusion: auto\nname: api-design\ndescription: REST API design patterns. Use when creating or modifying API endpoints.\n---\n# API Design\n",
+      );
+
+      const kiroRule = await KiroRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "api-design.md",
+      });
+      const roundTrip = kiroRule.toRulesyncRule();
+
+      expect(roundTrip.getFrontmatter().globs).toEqual([]);
+      expect(roundTrip.getFrontmatter().kiro).toEqual({
+        inclusion: "auto",
+        name: "api-design",
+        description: "REST API design patterns. Use when creating or modifying API endpoints.",
+      });
+      expect(roundTrip.getBody()).toContain("# API Design");
+    });
+
+    it("emits inclusion: auto with name/description from the kiro override", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "api-design.md",
+        frontmatter: {
+          root: false,
+          targets: ["kiro"],
+          description: "",
+          globs: [],
+          kiro: {
+            inclusion: "auto",
+            name: "api-design",
+            description: "REST API design patterns. Use when creating or modifying API endpoints.",
+          },
+        },
+        body: "# API Design",
+      });
+
+      const generated = KiroRule.fromRulesyncRule({ outputRoot: testDir, rulesyncRule });
+      const content = generated.getFileContent();
+
+      expect(content).toContain("inclusion: auto");
+      expect(content).toContain("name: api-design");
+      expect(content).toContain(
+        "description: REST API design patterns. Use when creating or modifying API endpoints.",
+      );
+    });
+
+    it("should use custom outputRoot", () => {
       const rulesyncRule = new RulesyncRule({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "custom-base.md",
@@ -299,7 +527,7 @@ describe("KiroRule", () => {
       });
 
       const kiroRule = KiroRule.fromRulesyncRule({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         rulesyncRule,
       });
 
@@ -377,7 +605,7 @@ describe("KiroRule", () => {
   describe("toRulesyncRule", () => {
     it("should convert KiroRule to RulesyncRule for root rule", () => {
       const kiroRule = new KiroRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".kiro/steering",
         relativeFilePath: "product.md",
         fileContent: "# Convert Test\n\nThis will be converted.",
@@ -394,7 +622,7 @@ describe("KiroRule", () => {
 
     it("should convert KiroRule to RulesyncRule for steering document", () => {
       const kiroRule = new KiroRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".kiro/steering",
         relativeFilePath: "structure-convert.md",
         fileContent: "# Structure Convert Test\n\nThis structure will be converted.",
@@ -413,7 +641,7 @@ describe("KiroRule", () => {
 
     it("should preserve metadata in conversion", () => {
       const kiroRule = new KiroRule({
-        baseDir: "/test/path",
+        outputRoot: "/test/path",
         relativeDirPath: ".kiro/steering",
         relativeFilePath: "metadata-test.md",
         fileContent: "# Metadata Test\n\nWith metadata preserved.",
@@ -439,7 +667,7 @@ describe("KiroRule", () => {
 
       for (const doc of documents) {
         const kiroRule = new KiroRule({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: ".kiro/steering",
           relativeFilePath: doc.filename,
           fileContent: doc.content,
@@ -516,7 +744,7 @@ describe("KiroRule", () => {
 
       // Load from file
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "product.md",
       });
 
@@ -538,7 +766,7 @@ describe("KiroRule", () => {
 
       // Load from file
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "structure.md",
       });
 
@@ -556,7 +784,7 @@ describe("KiroRule", () => {
 
       // Start with rulesync rule (root)
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "roundtrip.md",
         frontmatter: {
@@ -570,7 +798,7 @@ describe("KiroRule", () => {
 
       // Convert to kiro rule
       const kiroRule = KiroRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 
@@ -587,7 +815,7 @@ describe("KiroRule", () => {
 
       // Start with rulesync rule (non-root)
       const originalRulesync = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "detail-roundtrip.md",
         frontmatter: {
@@ -601,7 +829,7 @@ describe("KiroRule", () => {
 
       // Convert to kiro rule
       const kiroRule = KiroRule.fromRulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncRule: originalRulesync,
       });
 
@@ -621,7 +849,7 @@ describe("KiroRule", () => {
       await writeFileContent(join(nestedDir, "nested-product.md"), content);
 
       const kiroRule = await KiroRule.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "nested/nested-product.md",
       });
 
@@ -644,7 +872,7 @@ describe("KiroRule", () => {
         await writeFileContent(join(steeringDir, doc.filename), doc.content);
 
         const kiroRule = await KiroRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: doc.filename,
         });
 
@@ -660,7 +888,7 @@ describe("KiroRule", () => {
   describe("isTargetedByRulesyncRule", () => {
     it("should return true for rules targeting kiro", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -674,7 +902,7 @@ describe("KiroRule", () => {
 
     it("should return true for rules targeting all tools (*)", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -688,7 +916,7 @@ describe("KiroRule", () => {
 
     it("should return false for rules not targeting kiro", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -702,7 +930,7 @@ describe("KiroRule", () => {
 
     it("should return false for empty targets", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -716,7 +944,7 @@ describe("KiroRule", () => {
 
     it("should handle mixed targets including kiro", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {
@@ -730,7 +958,7 @@ describe("KiroRule", () => {
 
     it("should handle undefined targets in frontmatter", () => {
       const rulesyncRule = new RulesyncRule({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: "test.md",
         frontmatter: {},
@@ -833,6 +1061,59 @@ describe("KiroRule", () => {
         expect(kiroRule.getFileContent()).toBe(content);
         expect(kiroRule.validate().success).toBe(true);
       }
+    });
+  });
+
+  describe("global scope", () => {
+    it("getSettablePaths returns only the steering non-root dir in project mode", () => {
+      const paths = KiroRule.getSettablePaths();
+      expect(paths).toEqual({ nonRoot: { relativeDirPath: ".kiro/steering" } });
+      expect("root" in paths).toBe(false);
+    });
+
+    it("getSettablePaths returns a product.md root under steering in global mode", () => {
+      const paths = KiroRule.getSettablePaths({ global: true });
+      expect(paths).toEqual({
+        root: { relativeDirPath: ".kiro/steering", relativeFilePath: "product.md" },
+        nonRoot: { relativeDirPath: ".kiro/steering" },
+      });
+    });
+
+    it("fromRulesyncRule writes the root rule to steering/product.md in global mode", () => {
+      const rulesyncRule = new RulesyncRule({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "overview.md",
+        frontmatter: { root: true, targets: ["kiro"], description: "Root", globs: [] },
+        body: "Root steering body",
+      });
+
+      const kiroRule = KiroRule.fromRulesyncRule({
+        outputRoot: testDir,
+        rulesyncRule,
+        global: true,
+      });
+
+      expect(kiroRule.getRelativeDirPath()).toBe(".kiro/steering");
+      expect(kiroRule.getRelativeFilePath()).toBe("product.md");
+      expect(kiroRule.isRoot()).toBe(true);
+      // The root steering file stays plain (no inclusion frontmatter).
+      expect(kiroRule.getFileContent()).toContain("Root steering body");
+      expect(kiroRule.getFileContent()).not.toContain("inclusion:");
+    });
+
+    it("fromFile treats steering/product.md as the root rule in global mode", async () => {
+      const steeringDir = join(testDir, ".kiro", "steering");
+      await ensureDir(steeringDir);
+      await writeFileContent(join(steeringDir, "product.md"), "Root overview");
+
+      const kiroRule = await KiroRule.fromFile({
+        outputRoot: testDir,
+        relativeFilePath: "product.md",
+        global: true,
+      });
+
+      expect(kiroRule.getRelativeFilePath()).toBe("product.md");
+      expect(kiroRule.isRoot()).toBe(true);
     });
   });
 });

@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { JUNIE_AGENTS_DIR_PATH, JUNIE_ALT_AGENTS_DIR_PATH } from "../../constants/junie-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
@@ -16,9 +17,29 @@ import {
   ToolSubagentSettablePaths,
 } from "./tool-subagent.js";
 
+/**
+ * Frontmatter for Junie CLI custom subagents (`.junie/agents/*.md`). Junie
+ * documents these fields; the schema stays loose (and the list fields accept a
+ * single string or an array) for forward compatibility.
+ *
+ * @see https://junie.jetbrains.com/docs/junie-cli-subagents.html
+ */
 export const JunieSubagentFrontmatterSchema = z.looseObject({
   name: z.optional(z.string()),
   description: z.string(),
+  // Tool access controls.
+  tools: z.optional(z.union([z.string(), z.array(z.string())])),
+  disallowedTools: z.optional(z.union([z.string(), z.array(z.string())])),
+  // MCP servers the subagent may use.
+  mcpServers: z.optional(z.union([z.string(), z.array(z.string())])),
+  // Model and reasoning controls (`reasoningLevel`: low | medium | high).
+  model: z.optional(z.string()),
+  reasoningLevel: z.optional(z.string()),
+  maxTurns: z.optional(z.number()),
+  // Agent Skills the subagent should utilize.
+  skills: z.optional(z.union([z.string(), z.array(z.string())])),
+  // Whether the subagent accepts a prompt argument.
+  allowPromptArgument: z.optional(z.boolean()),
 });
 
 export type JunieSubagentFrontmatter = z.infer<typeof JunieSubagentFrontmatterSchema>;
@@ -50,12 +71,18 @@ export class JunieSubagent extends ToolSubagent {
     this.body = body;
   }
 
-  static getSettablePaths(options: { global?: boolean } = {}): ToolSubagentSettablePaths {
-    if (options?.global) {
-      throw new Error("JunieSubagent does not support global mode.");
-    }
+  static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
+    // Junie subagents use the same relative path for both project and global modes.
+    // The actual location differs based on outputRoot:
+    // - Project mode: {process.cwd()}/.junie/agents/
+    // - Global mode: {getHomeDirectory()}/.junie/agents/
+    //
+    // Junie additionally discovers subagents from the cross-tool `.agents/`
+    // directory (project `.agents/` and user `~/.agents/`). That is an
+    // import-only root: generation still writes to `.junie/agents/`.
     return {
-      relativeDirPath: join(".junie", "agents"),
+      relativeDirPath: JUNIE_AGENTS_DIR_PATH,
+      importDirPaths: [JUNIE_ALT_AGENTS_DIR_PATH],
     };
   }
 
@@ -82,7 +109,7 @@ export class JunieSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".",
+      outputRoot: ".",
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
@@ -92,7 +119,7 @@ export class JunieSubagent extends ToolSubagent {
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -123,13 +150,14 @@ export class JunieSubagent extends ToolSubagent {
     const paths = this.getSettablePaths({ global });
 
     return new JunieSubagent({
-      baseDir,
+      outputRoot,
       frontmatter: junieFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: rulesyncSubagent.getRelativeFilePath(),
       fileContent,
       validate,
+      global,
     });
   }
 
@@ -159,13 +187,16 @@ export class JunieSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
+    relativeDirPath,
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<JunieSubagent> {
-    const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    // Honor an explicit discovery root (e.g. the `.agents/` import root) when
+    // provided; otherwise fall back to the canonical `.junie/agents/` location.
+    const dirPath = relativeDirPath ?? this.getSettablePaths({ global }).relativeDirPath;
+    const filePath = join(outputRoot, dirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
 
@@ -175,23 +206,24 @@ export class JunieSubagent extends ToolSubagent {
     }
 
     return new JunieSubagent({
-      baseDir,
-      relativeDirPath: paths.relativeDirPath,
+      outputRoot,
+      relativeDirPath: dirPath,
       relativeFilePath,
       frontmatter: result.data,
       body: content.trim(),
       fileContent,
       validate,
+      global,
     });
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): JunieSubagent {
     return new JunieSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { name: "", description: "" },

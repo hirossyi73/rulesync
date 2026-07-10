@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { z } from "zod/mini";
 
+import { KIRO_AGENTS_DIR_PATH } from "../../constants/kiro-paths.js";
 import { RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
@@ -62,9 +63,14 @@ export class KiroSubagent extends ToolSubagent {
     this.body = body;
   }
 
+  // Kiro reads agent configs from `.kiro/agents/` (workspace) and, for the
+  // Kiro CLI, also from `~/.kiro/agents/` (global, local takes precedence).
+  // Both scopes share the same relative path; the home-directory root is
+  // applied by the generate pipeline in global mode.
+  // https://kiro.dev/docs/cli/custom-agents/configuration-reference/
   static getSettablePaths(_options: { global?: boolean } = {}): ToolSubagentSettablePaths {
     return {
-      relativeDirPath: join(".kiro", "agents"),
+      relativeDirPath: KIRO_AGENTS_DIR_PATH,
     };
   }
 
@@ -100,7 +106,7 @@ export class KiroSubagent extends ToolSubagent {
     };
 
     return new RulesyncSubagent({
-      baseDir: ".",
+      outputRoot: ".",
       frontmatter: rulesyncFrontmatter,
       body: prompt ?? "",
       relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
@@ -110,7 +116,7 @@ export class KiroSubagent extends ToolSubagent {
   }
 
   static fromRulesyncSubagent({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncSubagent,
     validate = true,
     global = false,
@@ -136,7 +142,7 @@ export class KiroSubagent extends ToolSubagent {
     const relativeFilePath = rulesyncSubagent.getRelativeFilePath().replace(/\.md$/, ".json");
 
     return new KiroSubagent({
-      baseDir,
+      outputRoot,
       body,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
@@ -167,17 +173,17 @@ export class KiroSubagent extends ToolSubagent {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolSubagentFromFileParams): Promise<KiroSubagent> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
 
     const subagent = new KiroSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       body: fileContent.trim(),
@@ -199,12 +205,12 @@ export class KiroSubagent extends ToolSubagent {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolSubagentForDeletionParams): KiroSubagent {
     return new KiroSubagent({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       body: "",

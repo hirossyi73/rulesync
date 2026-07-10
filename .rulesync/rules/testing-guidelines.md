@@ -2,7 +2,7 @@
 root: false
 targets: ["*"]
 description: "When you write tests, must follow these guidelines."
-globs: ["**/*.test.ts"]
+globs: ["**/*.test.ts", "src/e2e/**/*.spec.ts"]
 ---
 
 # Testing Guidelines
@@ -30,7 +30,7 @@ globs: ["**/*.test.ts"]
       it("Test Case", async () => {
         // Run test using testDir
         await RulesyncRule.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "test.md",
         });
         // ...

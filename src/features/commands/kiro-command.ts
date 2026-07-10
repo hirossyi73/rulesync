@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { KIRO_PROMPTS_DIR_PATH } from "../../constants/kiro-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContent } from "../../utils/file.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
@@ -13,9 +14,14 @@ import {
 } from "./tool-command.js";
 
 export class KiroCommand extends ToolCommand {
+  // Kiro reads prompts from `.kiro/prompts/` (workspace) and, for the Kiro
+  // CLI, also from `~/.kiro/prompts/` (global, local takes precedence). Both
+  // scopes share the same relative path; the home-directory root is applied
+  // by the generate pipeline in global mode.
+  // https://kiro.dev/docs/cli/chat/manage-prompts/
   static getSettablePaths(_options: { global?: boolean } = {}): ToolCommandSettablePaths {
     return {
-      relativeDirPath: join(".kiro", "prompts"),
+      relativeDirPath: KIRO_PROMPTS_DIR_PATH,
     };
   }
 
@@ -25,7 +31,7 @@ export class KiroCommand extends ToolCommand {
     };
 
     return new RulesyncCommand({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       frontmatter: rulesyncFrontmatter,
       body: this.getFileContent(),
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -36,14 +42,14 @@ export class KiroCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
   }: ToolCommandFromRulesyncCommandParams): KiroCommand {
     const paths = this.getSettablePaths();
 
     return new KiroCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       fileContent: rulesyncCommand.getBody(),
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: rulesyncCommand.getRelativeFilePath(),
@@ -67,18 +73,18 @@ export class KiroCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
   }: ToolCommandFromFileParams): Promise<KiroCommand> {
     const paths = this.getSettablePaths();
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
 
     const fileContent = await readFileContent(filePath);
     const { body: content } = parseFrontmatter(fileContent, filePath);
 
     return new KiroCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       fileContent: content.trim(),
@@ -87,12 +93,12 @@ export class KiroCommand extends ToolCommand {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): KiroCommand {
     return new KiroCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "",

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   RULESYNC_MCP_RELATIVE_FILE_PATH,
+  RULESYNC_MCP_SCHEMA_URL,
   RULESYNC_RELATIVE_DIR_PATH,
 } from "../../constants/rulesync-paths.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
@@ -52,13 +53,13 @@ describe("RulesyncMcp", () => {
       expect(rulesyncMcp.getFileContent()).toBe(validJsonContent);
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const validJsonContent = JSON.stringify({
         mcpServers: {},
       });
 
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: validJsonContent,
@@ -67,7 +68,7 @@ describe("RulesyncMcp", () => {
       expect(rulesyncMcp.getFilePath()).toBe(
         `/custom/path/${RULESYNC_RELATIVE_DIR_PATH}/.mcp.json`,
       );
-      expect(rulesyncMcp.getBaseDir()).toBe("/custom/path");
+      expect(rulesyncMcp.getOutputRoot()).toBe("/custom/path");
     });
 
     it("should parse JSON content correctly", () => {
@@ -328,6 +329,25 @@ describe("RulesyncMcp", () => {
       expect(result.error).toBeNull();
     });
 
+    it("should pass validation when $schema field is present", () => {
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: basename(RULESYNC_MCP_RELATIVE_FILE_PATH),
+        fileContent: JSON.stringify({
+          $schema: RULESYNC_MCP_SCHEMA_URL,
+          mcpServers: {
+            "test-server": { command: "node" },
+          },
+        }),
+        validate: false,
+      });
+
+      const result = rulesyncMcp.validate();
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeNull();
+    });
+
     it("should pass validation when description is missing", () => {
       const rulesyncMcp = new RulesyncMcp({
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
@@ -487,7 +507,7 @@ describe("RulesyncMcp", () => {
 
       expect(rulesyncMcp).toBeInstanceOf(RulesyncMcp);
       expect(rulesyncMcp.getJson()).toEqual(jsonData);
-      expect(rulesyncMcp.getBaseDir()).toBe(testDir);
+      expect(rulesyncMcp.getOutputRoot()).toBe(testDir);
       expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
       expect(rulesyncMcp.getRelativeFilePath()).toBe(basename(RULESYNC_MCP_RELATIVE_FILE_PATH));
     });
@@ -695,7 +715,7 @@ describe("RulesyncMcp", () => {
 
     it("should have correct type definitions for parameters", () => {
       const constructorParams: RulesyncMcpParams = {
-        baseDir: "/custom",
+        outputRoot: "/custom",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: "{}",
@@ -706,7 +726,7 @@ describe("RulesyncMcp", () => {
         validate: false,
       };
 
-      expect(constructorParams.baseDir).toBe("/custom");
+      expect(constructorParams.outputRoot).toBe("/custom");
       expect(fromFileParams.validate).toBe(false);
     });
   });
@@ -735,20 +755,20 @@ describe("RulesyncMcp", () => {
       expect(typeof rulesyncMcp.getFileContent()).toBe("string");
       expect(typeof rulesyncMcp.getRelativeDirPath()).toBe("string");
       expect(typeof rulesyncMcp.getRelativeFilePath()).toBe("string");
-      expect(typeof rulesyncMcp.getBaseDir()).toBe("string");
+      expect(typeof rulesyncMcp.getOutputRoot()).toBe("string");
       expect(typeof rulesyncMcp.getRelativePathFromCwd()).toBe("string");
     });
 
     it("should call parent constructor correctly", () => {
       const jsonData = { mcpServers: { test: { command: "node" } } };
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/test/base",
+        outputRoot: "/test/base",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify(jsonData),
       });
 
-      expect(rulesyncMcp.getBaseDir()).toBe("/test/base");
+      expect(rulesyncMcp.getOutputRoot()).toBe("/test/base");
       expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
       expect(rulesyncMcp.getRelativeFilePath()).toBe(".mcp.json");
       expect(rulesyncMcp.getFileContent()).toBe(JSON.stringify(jsonData));
@@ -897,9 +917,9 @@ describe("RulesyncMcp", () => {
       expect(rulesyncMcp.getJson()).toEqual(originalData);
     });
 
-    it("should preserve baseDir and paths in the new instance", () => {
+    it("should preserve outputRoot and paths in the new instance", () => {
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify({
@@ -914,7 +934,7 @@ describe("RulesyncMcp", () => {
 
       const result = rulesyncMcp.stripMcpServerFields(["enabledTools"]);
 
-      expect(result.getBaseDir()).toBe("/custom/path");
+      expect(result.getOutputRoot()).toBe("/custom/path");
       expect(result.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
       expect(result.getRelativeFilePath()).toBe(".mcp.json");
     });
@@ -963,6 +983,54 @@ describe("RulesyncMcp", () => {
       // getMcpServers should also reflect stripped fields
       const servers = result.getMcpServers();
       expect((servers["my-server"] as any).enabledTools).toBeUndefined();
+    });
+  });
+
+  describe("getMcpServers field stripping", () => {
+    it("should strip codex-specific envVars from getMcpServers output", () => {
+      // envVars is codex-only; it must NOT leak into other tools' generated
+      // configs (claudecode, opencode, kilo, etc.) which all
+      // consume getMcpServers(). The codex generator reads envVars directly
+      // from getJson() instead.
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: {
+            pal: {
+              type: "stdio",
+              command: "uvx",
+              args: ["pal-mcp-server"],
+              envVars: ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+            },
+          },
+        }),
+      });
+
+      const servers = rulesyncMcp.getMcpServers();
+
+      expect(servers.pal).toBeDefined();
+      expect((servers.pal as any).command).toBe("uvx");
+      expect((servers.pal as any).envVars).toBeUndefined();
+    });
+
+    it("should still expose envVars via getJson() for the codex generator", () => {
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: "mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: {
+            pal: {
+              type: "stdio",
+              command: "uvx",
+              envVars: ["OPENAI_API_KEY"],
+            },
+          },
+        }),
+      });
+
+      const fromJson = rulesyncMcp.getJson().mcpServers.pal;
+      expect((fromJson as any).envVars).toEqual(["OPENAI_API_KEY"]);
     });
   });
 

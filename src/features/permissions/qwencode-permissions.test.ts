@@ -1,0 +1,398 @@
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  RULESYNC_PERMISSIONS_FILE_NAME,
+  RULESYNC_RELATIVE_DIR_PATH,
+} from "../../constants/rulesync-paths.js";
+import { setupTestDirectory } from "../../test-utils/test-directories.js";
+import { ensureDir, fileExists, writeFileContent } from "../../utils/file.js";
+import { QwencodePermissions } from "./qwencode-permissions.js";
+import { RulesyncPermissions } from "./rulesync-permissions.js";
+
+describe("QwencodePermissions", () => {
+  let testDir: string;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    ({ testDir, cleanup } = await setupTestDirectory());
+    vi.spyOn(process, "cwd").mockReturnValue(testDir);
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("should resolve settable paths", () => {
+    expect(QwencodePermissions.getSettablePaths()).toEqual({
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+    });
+  });
+
+  it("should convert rulesync permissions into Qwen settings.json format", async () => {
+    const rulesyncPermissions = new RulesyncPermissions({
+      relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+      relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+      fileContent: JSON.stringify({
+        permission: {
+          bash: { "git *": "allow", "rm *": "deny", "*": "ask" },
+          read: { ".env": "deny" },
+          webfetch: { "github.com": "allow" },
+        },
+      }),
+    });
+
+    const instance = await QwencodePermissions.fromRulesyncPermissions({
+      outputRoot: testDir,
+      rulesyncPermissions,
+    });
+
+    const content = JSON.parse(instance.getFileContent());
+    expect(content.permissions.allow).toContain("Bash(git *)");
+    expect(content.permissions.allow).toContain("WebFetch(github.com)");
+    expect(content.permissions.ask).toContain("Bash");
+    expect(content.permissions.deny).toContain("Bash(rm *)");
+    expect(content.permissions.deny).toContain("Read(.env)");
+  });
+
+  it("should preserve unrelated keys in existing settings.json", async () => {
+    const settingsDir = join(testDir, ".qwen");
+    await ensureDir(settingsDir);
+    await writeFileContent(
+      join(settingsDir, "settings.json"),
+      JSON.stringify({
+        theme: "dark",
+        permissions: { allow: ["Bash(npm *)"] },
+      }),
+    );
+
+    const rulesyncPermissions = new RulesyncPermissions({
+      relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+      relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+      fileContent: JSON.stringify({
+        permission: { read: { "src/**": "allow" } },
+      }),
+    });
+
+    const instance = await QwencodePermissions.fromRulesyncPermissions({
+      outputRoot: testDir,
+      rulesyncPermissions,
+    });
+
+    const content = JSON.parse(instance.getFileContent());
+    expect(content.theme).toBe("dark");
+    // Bash entry preserved (not managed)
+    expect(content.permissions.allow).toContain("Bash(npm *)");
+    // New Read entry added
+    expect(content.permissions.allow).toContain("Read(src/**)");
+  });
+
+  it("should round-trip Qwen settings to rulesync permissions", () => {
+    const instance = new QwencodePermissions({
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+      fileContent: JSON.stringify({
+        permissions: {
+          allow: ["Bash(npm run *)", "Read(src/**)"],
+          ask: ["Bash(git push *)"],
+          deny: ["Bash(rm -rf *)"],
+        },
+      }),
+    });
+
+    const config = instance.toRulesyncPermissions().getJson();
+    expect(config.permission.bash).toEqual({
+      "npm run *": "allow",
+      "git push *": "ask",
+      "rm -rf *": "deny",
+    });
+    expect(config.permission.read).toEqual({ "src/**": "allow" });
+  });
+
+  it("forDeletion returns non-deletable instance", () => {
+    const instance = QwencodePermissions.forDeletion({
+      outputRoot: testDir,
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+    });
+    expect(instance.isDeletable()).toBe(false);
+  });
+
+  it("should round-trip patterns containing nested parentheses (single, sequential, and multi-nest)", () => {
+    const instance = new QwencodePermissions({
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+      fileContent: JSON.stringify({
+        permissions: {
+          allow: [
+            // Single-level nesting (baseline).
+            "Bash(echo (a))",
+            "Bash(grep (foo|bar))",
+            // Sequential parens at the same nesting level — each opens and closes before the next.
+            "Bash(grep (foo) | wc (-l))",
+            // Multi-level nesting — `lastIndexOf(')')` must still anchor on the outermost `)`.
+            "Bash(echo ((deep)))",
+          ],
+        },
+      }),
+    });
+
+    const config = instance.toRulesyncPermissions().getJson();
+    // Last `)` is used as the closing delimiter so all inner parens (single, sequential, deep) are preserved.
+    expect(config.permission.bash).toEqual({
+      "echo (a)": "allow",
+      "grep (foo|bar)": "allow",
+      "grep (foo) | wc (-l)": "allow",
+      "echo ((deep))": "allow",
+    });
+  });
+
+  it("should drop malformed allow entries (fail-closed: do not broaden a narrow rule into '*')", () => {
+    const instance = new QwencodePermissions({
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+      fileContent: JSON.stringify({
+        permissions: {
+          // Malformed: trailing chars after closing paren and missing closing paren.
+          allow: ["Bash(npm *)trailing", "Bash(rm -rf"],
+          // A well-formed entry alongside malformed ones must still survive.
+          ask: ["Bash(npm install)", "Bash(rm -rf"],
+        },
+      }),
+    });
+
+    const config = instance.toRulesyncPermissions().getJson();
+    // Allow has only malformed entries — Bash should NOT appear because each malformed entry
+    // is dropped (NOT broadened into `*`).
+    expect(config.permission.bash?.["*"]).toBeUndefined();
+    // Ask retains the well-formed entry; the malformed one is dropped.
+    expect(config.permission.bash?.["npm install"]).toBe("ask");
+  });
+
+  it("should still fall back to '*' for malformed deny entries (fail-closed: broader is safer)", () => {
+    const instance = new QwencodePermissions({
+      relativeDirPath: ".qwen",
+      relativeFilePath: "settings.json",
+      fileContent: JSON.stringify({
+        permissions: {
+          deny: ["Bash(rm -rf"],
+        },
+      }),
+    });
+
+    const config = instance.toRulesyncPermissions().getJson();
+    // Deny falls open into `*` because broadening a deny is the safer direction.
+    expect(config.permission.bash).toEqual({ "*": "deny" });
+  });
+
+  it("should not create the .qwen directory when generating with no existing file (dry-run safe)", async () => {
+    const rulesyncPermissions = new RulesyncPermissions({
+      relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+      relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+      fileContent: JSON.stringify({
+        permission: { bash: { "git *": "allow" } },
+      }),
+    });
+
+    await QwencodePermissions.fromRulesyncPermissions({
+      outputRoot: testDir,
+      rulesyncPermissions,
+    });
+
+    // The construction phase MUST NOT create the destination file/directory; that is
+    // performed only by `writeAiFiles`. This protects dry-run mode.
+    expect(await fileExists(join(testDir, ".qwen"))).toBe(false);
+    expect(await fileExists(join(testDir, ".qwen", "settings.json"))).toBe(false);
+  });
+
+  describe("qwencode override (tools / security)", () => {
+    it("merges tools/security from the qwencode override into settings.json", async () => {
+      const instance = await QwencodePermissions.fromRulesyncPermissions({
+        outputRoot: testDir,
+        rulesyncPermissions: new RulesyncPermissions({
+          relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+          relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+          fileContent: JSON.stringify({
+            permission: { bash: { "git *": "allow" } },
+            qwencode: {
+              tools: { approvalMode: "auto-edit", autoAccept: true },
+              security: { folderTrust: { enabled: true } },
+            },
+          }),
+        }),
+      });
+
+      const content = JSON.parse(instance.getFileContent());
+      expect(content.tools).toEqual({ approvalMode: "auto-edit", autoAccept: true });
+      expect(content.security).toEqual({ folderTrust: { enabled: true } });
+      // The shared permission block is still emitted.
+      expect(content.permissions.allow).toContain("Bash(git *)");
+    });
+
+    it("preserves unrelated tools keys while the override sets its own", async () => {
+      const settingsDir = join(testDir, ".qwen");
+      await ensureDir(settingsDir);
+      await writeFileContent(
+        join(settingsDir, "settings.json"),
+        JSON.stringify({ tools: { core: ["ReadFile"], approvalMode: "default" } }),
+      );
+
+      const instance = await QwencodePermissions.fromRulesyncPermissions({
+        outputRoot: testDir,
+        rulesyncPermissions: new RulesyncPermissions({
+          relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+          relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+          fileContent: JSON.stringify({
+            permission: { bash: { "git *": "allow" } },
+            qwencode: { tools: { approvalMode: "yolo" } },
+          }),
+        }),
+      });
+
+      const content = JSON.parse(instance.getFileContent());
+      // Unrelated `core` preserved; `approvalMode` overridden.
+      expect(content.tools).toEqual({ core: ["ReadFile"], approvalMode: "yolo" });
+    });
+
+    it("preserves an unrelated security sibling key while replacing folderTrust wholesale", async () => {
+      const settingsDir = join(testDir, ".qwen");
+      await ensureDir(settingsDir);
+      await writeFileContent(
+        join(settingsDir, "settings.json"),
+        JSON.stringify({ security: { auth: { type: "oauth" }, folderTrust: { enabled: false } } }),
+      );
+
+      const instance = await QwencodePermissions.fromRulesyncPermissions({
+        outputRoot: testDir,
+        rulesyncPermissions: new RulesyncPermissions({
+          relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+          relativeFilePath: RULESYNC_PERMISSIONS_FILE_NAME,
+          fileContent: JSON.stringify({
+            permission: { bash: { "git *": "allow" } },
+            qwencode: { security: { folderTrust: { enabled: true } } },
+          }),
+        }),
+      });
+
+      const content = JSON.parse(instance.getFileContent());
+      // Sibling `auth` preserved; folderTrust replaced by the override.
+      expect(content.security).toEqual({
+        auth: { type: "oauth" },
+        folderTrust: { enabled: true },
+      });
+    });
+
+    it("routes tools/security autonomy settings back into the qwencode override on import", () => {
+      const instance = new QwencodePermissions({
+        relativeDirPath: ".qwen",
+        relativeFilePath: "settings.json",
+        fileContent: JSON.stringify({
+          permissions: { allow: ["Bash(git *)"] },
+          tools: { approvalMode: "auto-edit", core: ["ReadFile"] },
+          security: { folderTrust: { enabled: true } },
+        }),
+      });
+
+      const json = instance.toRulesyncPermissions().getJson();
+      expect(json.permission.bash?.["git *"]).toBe("allow");
+      // Only the override-managed keys are extracted (not `tools.core`).
+      expect(json.qwencode).toEqual({
+        tools: { approvalMode: "auto-edit" },
+        security: { folderTrust: { enabled: true } },
+      });
+    });
+
+    it("does not emit a qwencode override when no autonomy settings are present", () => {
+      const instance = new QwencodePermissions({
+        relativeDirPath: ".qwen",
+        relativeFilePath: "settings.json",
+        fileContent: JSON.stringify({ permissions: { allow: ["Bash(git *)"] } }),
+      });
+
+      expect(instance.toRulesyncPermissions().getJson().qwencode).toBeUndefined();
+    });
+  });
+
+  describe("validate()", () => {
+    it("should succeed for well-formed Qwen settings JSON", () => {
+      const instance = new QwencodePermissions({
+        relativeDirPath: ".qwen",
+        relativeFilePath: "settings.json",
+        fileContent: JSON.stringify({
+          permissions: { allow: ["Bash(git *)"], deny: ["Bash(rm -rf *)"] },
+        }),
+      });
+      const result = instance.validate();
+      expect(result.success).toBe(true);
+      expect(result.error).toBeNull();
+    });
+
+    it("should fail when fileContent is not parseable JSON", () => {
+      const instance = new QwencodePermissions({
+        relativeDirPath: ".qwen",
+        relativeFilePath: "settings.json",
+        fileContent: "{ not json",
+      });
+      const result = instance.validate();
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBeNull();
+    });
+
+    it("should fail when fileContent does not match schema", () => {
+      const instance = new QwencodePermissions({
+        relativeDirPath: ".qwen",
+        relativeFilePath: "settings.json",
+        // `permissions.allow` must be an array of strings, not numbers.
+        fileContent: JSON.stringify({ permissions: { allow: [42] } }),
+      });
+      const result = instance.validate();
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBeNull();
+    });
+
+    it("should throw when constructed with validate: true and malformed JSON", () => {
+      // `fromFile({ validate: true })` flows through the constructor with
+      // `validate: true`; the constructor must invoke `validate()` and throw
+      // on failure so callers reading `validate: true` see schema violations
+      // surface immediately rather than deeper in the pipeline.
+      expect(
+        () =>
+          new QwencodePermissions({
+            relativeDirPath: ".qwen",
+            relativeFilePath: "settings.json",
+            fileContent: "{ not json",
+            validate: true,
+          }),
+      ).toThrow();
+    });
+
+    it("should throw when constructed with validate: true and schema violation", () => {
+      expect(
+        () =>
+          new QwencodePermissions({
+            relativeDirPath: ".qwen",
+            relativeFilePath: "settings.json",
+            fileContent: JSON.stringify({ permissions: { allow: [42] } }),
+            validate: true,
+          }),
+      ).toThrow();
+    });
+
+    it("should not throw when constructed with validate: false even with malformed JSON", () => {
+      // `forDeletion` and other permissive paths pass `validate: false` and
+      // must not be rejected at construction time.
+      expect(
+        () =>
+          new QwencodePermissions({
+            relativeDirPath: ".qwen",
+            relativeFilePath: "settings.json",
+            fileContent: "{ not json",
+            validate: false,
+          }),
+      ).not.toThrow();
+    });
+  });
+});

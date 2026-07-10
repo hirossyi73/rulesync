@@ -2,10 +2,15 @@ import { join } from "node:path";
 
 import { optional, z } from "zod/mini";
 
+import {
+  OPENCODE_COMMANDS_DIR_PATH,
+  OPENCODE_GLOBAL_COMMANDS_DIR_PATH,
+} from "../../constants/opencode-paths.js";
 import { AiFileParams, ValidationResult } from "../../types/ai-file.js";
 import { formatError } from "../../utils/error.js";
 import { readFileContent } from "../../utils/file.js";
 import { parseFrontmatter, stringifyFrontmatter } from "../../utils/frontmatter.js";
+import { asOpencodeEntries, readOpencodeConfig } from "../opencode-config.js";
 import { RulesyncCommand, RulesyncCommandFrontmatter } from "./rulesync-command.js";
 import {
   ToolCommand,
@@ -53,10 +58,12 @@ export class OpenCodeCommand extends ToolCommand {
   }
 
   static getSettablePaths({ global }: { global?: boolean } = {}): ToolCommandSettablePaths {
+    // OpenCode's canonical directory is the plural `commands/`. The singular
+    // `command/` is deprecated upstream (kept only for backwards compatibility),
+    // so rulesync emits the plural form to match the documented convention and
+    // its own plural `.opencode/plugins` hooks output.
     return {
-      relativeDirPath: global
-        ? join(".config", "opencode", "command")
-        : join(".opencode", "command"),
+      relativeDirPath: global ? OPENCODE_GLOBAL_COMMANDS_DIR_PATH : OPENCODE_COMMANDS_DIR_PATH,
     };
   }
 
@@ -80,7 +87,7 @@ export class OpenCodeCommand extends ToolCommand {
     const fileContent = stringifyFrontmatter(this.body, rulesyncFrontmatter);
 
     return new RulesyncCommand({
-      baseDir: process.cwd(),
+      outputRoot: process.cwd(),
       frontmatter: rulesyncFrontmatter,
       body: this.body,
       relativeDirPath: RulesyncCommand.getSettablePaths().relativeDirPath,
@@ -91,7 +98,7 @@ export class OpenCodeCommand extends ToolCommand {
   }
 
   static fromRulesyncCommand({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncCommand,
     validate = true,
     global = false,
@@ -108,7 +115,7 @@ export class OpenCodeCommand extends ToolCommand {
     const paths = this.getSettablePaths({ global });
 
     return new OpenCodeCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       frontmatter: opencodeFrontmatter,
       body,
       relativeDirPath: paths.relativeDirPath,
@@ -135,13 +142,13 @@ export class OpenCodeCommand extends ToolCommand {
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeFilePath,
     validate = true,
     global = false,
   }: ToolCommandFromFileParams): Promise<OpenCodeCommand> {
     const paths = this.getSettablePaths({ global });
-    const filePath = join(baseDir, paths.relativeDirPath, relativeFilePath);
+    const filePath = join(outputRoot, paths.relativeDirPath, relativeFilePath);
     const fileContent = await readFileContent(filePath);
     const { frontmatter, body: content } = parseFrontmatter(fileContent, filePath);
 
@@ -151,7 +158,7 @@ export class OpenCodeCommand extends ToolCommand {
     }
 
     return new OpenCodeCommand({
-      baseDir: baseDir,
+      outputRoot: outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath,
       frontmatter: result.data,
@@ -167,13 +174,69 @@ export class OpenCodeCommand extends ToolCommand {
     });
   }
 
+  /**
+   * Imports commands defined inline in `opencode.json` / `opencode.jsonc` under
+   * the top-level `command` key (in addition to the Markdown files under
+   * `.opencode/commands/`). Each entry's `template` becomes the command body,
+   * while `description` / `agent` / `model` / `subtask` map to the frontmatter.
+   *
+   * Import-only: this is invoked by the commands processor when loading tool
+   * files for conversion to rulesync, never for orphan deletion.
+   *
+   * @see https://opencode.ai/docs/commands/#json
+   */
+  static async loadAdditionalImportFiles({
+    outputRoot = process.cwd(),
+    global = false,
+  }: {
+    outputRoot?: string;
+    global?: boolean;
+  } = {}): Promise<OpenCodeCommand[]> {
+    const config = await readOpencodeConfig({ outputRoot, global });
+    const commandEntries = asOpencodeEntries(config.command);
+    if (!commandEntries) {
+      return [];
+    }
+
+    const paths = this.getSettablePaths({ global });
+    const commands: OpenCodeCommand[] = [];
+
+    for (const [name, rawEntry] of Object.entries(commandEntries)) {
+      const entry = asOpencodeEntries(rawEntry);
+      if (!entry) {
+        continue;
+      }
+
+      const body = typeof entry.template === "string" ? entry.template : "";
+      const frontmatter: OpenCodeCommandFrontmatter = {
+        ...(typeof entry.description === "string" && { description: entry.description }),
+        ...(typeof entry.agent === "string" && { agent: entry.agent }),
+        ...(typeof entry.model === "string" && { model: entry.model }),
+        ...(typeof entry.subtask === "boolean" && { subtask: entry.subtask }),
+      };
+
+      commands.push(
+        new OpenCodeCommand({
+          outputRoot,
+          frontmatter,
+          body,
+          relativeDirPath: paths.relativeDirPath,
+          relativeFilePath: `${name}.md`,
+          validate: false,
+        }),
+      );
+    }
+
+    return commands;
+  }
+
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolCommandForDeletionParams): OpenCodeCommand {
     return new OpenCodeCommand({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       frontmatter: { description: "" },

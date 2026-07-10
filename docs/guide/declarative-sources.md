@@ -8,7 +8,7 @@ Add a `sources` array to your `rulesync.jsonc`:
 
 ```jsonc
 {
-  "$schema": "https://raw.githubusercontent.com/dyoshikawa/rulesync/refs/heads/main/config-schema.json",
+  "$schema": "https://github.com/dyoshikawa/rulesync/releases/latest/download/config-schema.json",
   "targets": ["copilot", "claudecode"],
   "features": ["rules", "skills"],
   "sources": [
@@ -31,19 +31,28 @@ Add a `sources` array to your `rulesync.jsonc`:
 
     // Git transport with a local repository
     { "source": "file:///path/to/local/repo", "transport": "git" },
+
+    // Git transport against a single-skill repo whose SKILL.md is at the root
+    {
+      "source": "https://github.com/feature-sliced/skills",
+      "transport": "git",
+      "path": ".",
+    },
   ],
 }
 ```
 
 Each entry in `sources` accepts:
 
-| Property    | Type       | Description                                                                                                                      |
-| ----------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `source`    | `string`   | Repository source. For GitHub transport: `owner/repo` or `owner/repo@ref:path`. For git transport: a full git URL.               |
-| `skills`    | `string[]` | Optional list of skill names to fetch. If omitted, all skills are fetched.                                                       |
-| `transport` | `string`   | `"github"` (default) uses the GitHub REST API. `"git"` uses git CLI and works with any git remote.                               |
-| `ref`       | `string`   | Branch, tag, or ref to fetch from. Defaults to the remote's default branch. For GitHub transport, use the `@ref` source syntax.  |
-| `path`      | `string`   | Path to the skills directory within the repository. Defaults to `"skills"`. For GitHub transport, use the `:path` source syntax. |
+| Property    | Type       | Description                                                                                                                                                                                                           |
+| ----------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`    | `string`   | Repository source. For GitHub transport: `owner/repo` or `owner/repo@ref:path`. For git transport: a full git URL.                                                                                                    |
+| `skills`    | `string[]` | Optional list of skill names to fetch. If omitted, all skills are fetched.                                                                                                                                            |
+| `transport` | `string`   | `"github"` (default) uses the GitHub REST API. `"git"` uses git CLI and works with any git remote.                                                                                                                    |
+| `ref`       | `string`   | Branch, tag, or ref to fetch from. Defaults to the remote's default branch. For GitHub transport, use the `@ref` source syntax.                                                                                       |
+| `path`      | `string`   | Path to the skills directory within the repository. Defaults to `"skills"`. Set to `""`, `"."`, or `"./"` to target the entire repository root (see note below). For GitHub transport, use the `:path` source syntax. |
+
+> **Repository-root paths (`path: "."`):** When `path` is `""`, `"."`, or `"./"` (with the `git` transport), rulesync disables sparse-checkout and fetches the **entire** repository tree, then groups each top-level directory as a skill. This is useful for single-skill repositories whose `SKILL.md` lives at the repo root (`<repo>/SKILL.md`) rather than under a `skills/` container. Because the whole tree is fetched, prefer a narrower `path` for large repositories; the fetch is still bounded by rulesync's file-count, total-size, and depth limits.
 
 ## How It Works
 
@@ -57,12 +66,84 @@ When `rulesync install` runs and `sources` is configured:
    - **First-declared source wins** — If two sources provide a skill with the same name, the one declared first in the `sources` array is used.
 5. **Output** — Fetched skills are written to `.rulesync/skills/.curated/<skill-name>/`. This directory is automatically added to `.gitignore` by `rulesync gitignore`.
 
+## Install Modes
+
+`rulesync install` supports three install modes via `--mode <mode>`:
+
+| Mode       | Manifest input               | Lockfile                 | Skill output layout                                                          |
+| ---------- | ---------------------------- | ------------------------ | ---------------------------------------------------------------------------- |
+| `rulesync` | `rulesync.jsonc` `sources`   | `rulesync.lock`          | `.rulesync/skills/.curated/<name>/` (then re-emitted by `rulesync generate`) |
+| `apm`      | `apm.yml` `dependencies.apm` | `rulesync-apm.lock.yaml` | `.github/instructions/`, `.github/skills/` (APM v1 layout)                   |
+| `gh`       | `rulesync.jsonc` `sources`   | `rulesync-gh.lock.yaml`  | Per-agent / per-scope dirs (matching `gh skill install`)                     |
+
+When `--mode` is omitted, rulesync defaults to `rulesync` mode. If `apm.yml` is present and `sources` is also defined, you must pass `--mode apm` or `--mode rulesync` to disambiguate.
+
+### `--mode gh` — gh-skill-install–compatible layout
+
+`--mode gh` reads the same `sources` array from `rulesync.jsonc` but writes each discovered skill into the agent-specific directory expected by `gh skill install`. Each source supports two extra fields:
+
+| Property | Type     | Default          | Description                                                                               |
+| -------- | -------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| `agent`  | `string` | `github-copilot` | One of `github-copilot`, `claude-code`, `cursor`, `codex`, `gemini`, `antigravity`.       |
+| `scope`  | `string` | `project`        | `project` writes inside the project root; `user` writes inside the user's home directory. |
+
+Agent → install directory mapping:
+
+| Agent            | Project scope (relative to project root) | User scope (relative to home) |
+| ---------------- | ---------------------------------------- | ----------------------------- |
+| `github-copilot` | `.agents/skills`                         | `.copilot/skills`             |
+| `claude-code`    | `.claude/skills`                         | `.claude/skills`              |
+| `cursor`         | `.agents/skills`                         | `.cursor/skills`              |
+| `codex`          | `.agents/skills`                         | `.agents/skills`              |
+| `gemini`         | `.agents/skills`                         | `.gemini/skills`              |
+| `antigravity`    | `.agents/skills`                         | `.gemini/antigravity/skills`  |
+
+For each skill discovered as `skills/<name>/SKILL.md` in the remote repository, rulesync deploys the entire skill directory to `<install-dir>/<name>/` and injects a provenance frontmatter block (`source`, `repository`, `ref`) into the deployed `SKILL.md`. The lockfile `rulesync-gh.lock.yaml` records one entry per `(source, agent, scope, skill)` tuple.
+
+Per-source field support in `--mode gh`:
+
+| Field       | Status                                                                                                                                       |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`    | Required. Must resolve to a GitHub repository (`owner/repo`, `owner/repo@ref`, or an `https://github.com/...` URL).                          |
+| `skills`    | Optional. When set, only the listed skill names are installed; remote skills not in the list are skipped, and missing names log a warning.   |
+| `ref`       | Optional. Pins a tag, branch, or commit SHA. When omitted, gh mode resolves to the latest release's tag, falling back to the default branch. |
+| `agent`     | Optional. Defaults to `github-copilot`. See the agent table above.                                                                           |
+| `scope`     | Optional. Defaults to `project`.                                                                                                             |
+| `transport` | **Rejected.** gh mode is GitHub-only and does not honor the `git` transport. Drop the field or switch to `--mode rulesync`.                  |
+| `path`      | **Rejected.** The remote layout is fixed to `skills/<name>/SKILL.md`. Repositories that store skills elsewhere are not supported in gh mode. |
+
+The remote repository must use the layout `skills/<name>/SKILL.md` (one directory per skill, each containing a `SKILL.md`). Other layouts are not auto-discovered.
+
+Example `rulesync.jsonc`:
+
+```jsonc
+{
+  "targets": ["claudecode"],
+  "features": ["rules"],
+  "sources": [
+    // Default: agent=github-copilot, scope=project -> .agents/skills/git-commit/
+    { "source": "acme/skills", "skills": ["git-commit"] },
+
+    // Same source, deployed for Claude Code at user scope -> ~/.claude/skills/git-commit/
+    {
+      "source": "acme/skills",
+      "skills": ["git-commit"],
+      "agent": "claude-code",
+      "scope": "user",
+    },
+  ],
+}
+```
+
+Run with `npx rulesync install --mode gh`.
+
 ## CLI Options
 
 The `install` command accepts these flags:
 
 | Flag              | Description                                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--mode <mode>`   | Install mode: `rulesync` (default), `apm`, or `gh`. See **Install Modes** above.                                                                             |
 | `--update`        | Force re-resolve all source refs, ignoring the lockfile (useful to pull new updates).                                                                        |
 | `--frozen`        | Fail if lockfile is missing or out of sync. Fetches missing skills using locked refs without updating the lockfile. Useful for CI to ensure reproducibility. |
 | `--token <token>` | GitHub token for private repositories.                                                                                                                       |

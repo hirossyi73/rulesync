@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { isAbsolute, resolve } from "node:path";
 
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { ALL_FEATURES } from "../types/features.js";
 import { ALL_TOOL_TARGETS } from "../types/tool-targets.js";
-import { Config, type ConfigParams } from "./config.js";
+import { assertTargetsFeaturesExclusive, Config, type ConfigParams } from "./config.js";
 
 describe("Config", () => {
   const defaultConfig: ConfigParams = {
-    baseDirs: ["."],
+    outputRoots: ["."],
     targets: ["cursor"],
     features: ["rules"],
     verbose: false,
@@ -14,10 +17,21 @@ describe("Config", () => {
   };
 
   const createConfig = (overrides: Partial<ConfigParams> = {}) => {
+    // The new schema-level mutual-exclusivity rule rejects any config that
+    // mixes an object-form side with a defined value on the other side
+    // (e.g., object-form `targets` + array-form `features`). The helper
+    // therefore strips the conflicting default automatically so individual
+    // tests can focus on the override they care about without repeating
+    // `features: undefined` / `targets: undefined` boilerplate.
+    const targetsIsObject = overrides.targets !== undefined && !Array.isArray(overrides.targets);
+    const featuresIsObject = overrides.features !== undefined && !Array.isArray(overrides.features);
+    const base: Partial<ConfigParams> = { ...defaultConfig };
+    if (targetsIsObject) delete base.features;
+    if (featuresIsObject) delete base.targets;
     return new Config({
-      ...defaultConfig,
+      ...base,
       ...overrides,
-    });
+    } as ConfigParams);
   };
 
   describe("conflicting targets validation", () => {
@@ -119,110 +133,286 @@ describe("Config", () => {
     });
   });
 
-  describe("per-target features configuration", () => {
-    it("should return all features when using array format with wildcard", () => {
-      const config = createConfig({ features: ["*"] });
-      const features = config.getFeatures();
-
-      expect(features).toContain("rules");
-      expect(features).toContain("ignore");
-      expect(features).toContain("mcp");
-      expect(features).toContain("commands");
-      expect(features).toContain("subagents");
-      expect(features).toContain("skills");
-      expect(features).toContain("hooks");
+  describe("gitignoreTargetsOnly", () => {
+    it("should default to true when not specified", () => {
+      const config = createConfig();
+      expect(config.getGitignoreTargetsOnly()).toBe(true);
     });
 
-    it("should return target-specific features when using object format", () => {
+    it("should respect an explicit false value", () => {
+      const config = createConfig({ gitignoreTargetsOnly: false });
+      expect(config.getGitignoreTargetsOnly()).toBe(false);
+    });
+
+    it("should respect an explicit true value", () => {
+      const config = createConfig({ gitignoreTargetsOnly: true });
+      expect(config.getGitignoreTargetsOnly()).toBe(true);
+    });
+  });
+
+  describe("getGitignoreDestination", () => {
+    it("defaults to gitignore", () => {
       const config = createConfig({
-        targets: ["copilot", "agentsmd"],
-        features: {
-          copilot: ["commands"],
-          agentsmd: ["rules", "mcp"],
+        targets: {
+          claudecode: ["rules"],
+        },
+      });
+      expect(config.getGitignoreDestination("claudecode", "rules")).toBe("gitignore");
+    });
+
+    it("supports tool-level destination", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: {
+            gitignoreDestination: "gitattributes",
+            rules: true,
+          },
+        },
+      });
+      expect(config.getGitignoreDestination("claudecode", "rules")).toBe("gitattributes");
+    });
+
+    it("prefers feature-level destination over tool-level destination", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: {
+            gitignoreDestination: "gitignore",
+            rules: { gitignoreDestination: "gitattributes" },
+          },
+        },
+      });
+      expect(config.getGitignoreDestination("claudecode", "rules")).toBe("gitattributes");
+    });
+
+    it("supports root-level destination", () => {
+      const config = createConfig({
+        gitignoreDestination: "gitattributes",
+      });
+      expect(config.getGitignoreDestination("claudecode", "rules")).toBe("gitattributes");
+    });
+
+    it("prefers tool-level destination over root-level destination", () => {
+      const config = createConfig({
+        gitignoreDestination: "gitignore",
+        targets: {
+          claudecode: {
+            gitignoreDestination: "gitattributes",
+            rules: true,
+          },
+        },
+      });
+      expect(config.getGitignoreDestination("claudecode", "rules")).toBe("gitattributes");
+    });
+  });
+
+  describe("object-form targets (per-target configuration)", () => {
+    it("should derive target list from targets object keys", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: ["rules", "commands"],
+          cursor: ["rules"],
         },
       });
 
-      expect(config.getFeatures("copilot")).toEqual(["commands"]);
-      expect(config.getFeatures("agentsmd")).toEqual(["rules", "mcp"]);
+      expect(config.getTargets()).toEqual(["claudecode", "cursor"]);
     });
 
-    it("should return empty array for target not in per-target features", () => {
+    it("should return per-target features from targets object values", () => {
       const config = createConfig({
-        targets: ["copilot", "cursor"],
-        features: {
-          copilot: ["commands"],
+        targets: {
+          claudecode: ["rules", "commands"],
+          cursor: ["rules", "mcp"],
+        },
+      });
+
+      expect(config.getFeatures("claudecode")).toEqual(["rules", "commands"]);
+      expect(config.getFeatures("cursor")).toEqual(["rules", "mcp"]);
+    });
+
+    it("should return per-feature options from targets object", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: {
+            rules: true,
+            ignore: { fileMode: "local" },
+          },
+        },
+      });
+
+      expect(config.getFeatures("claudecode")).toEqual(["rules", "ignore"]);
+      expect(config.getFeatureOptions("claudecode", "ignore")).toEqual({ fileMode: "local" });
+      expect(config.getFeatureOptions("claudecode", "rules")).toBeUndefined();
+    });
+
+    it("should expand wildcard inside targets object value", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: ["*"],
+          cursor: ["rules"],
+        },
+      });
+
+      const claudeFeatures = config.getFeatures("claudecode");
+      expect(claudeFeatures).toHaveLength(ALL_FEATURES.length);
+      expect(config.getFeatures("cursor")).toEqual(["rules"]);
+    });
+
+    it("should return empty array for target not present in targets object", () => {
+      const config = createConfig({
+        targets: {
+          claudecode: ["rules"],
         },
       });
 
       expect(config.getFeatures("cursor")).toEqual([]);
     });
 
-    it("should handle wildcard in per-target features", () => {
+    it("should collect all unique features across targets object", () => {
       const config = createConfig({
-        targets: ["copilot", "agentsmd"],
-        features: {
-          copilot: ["*"],
-          agentsmd: ["rules"],
-        },
-      });
-
-      const copilotFeatures = config.getFeatures("copilot");
-      expect(copilotFeatures).toContain("rules");
-      expect(copilotFeatures).toContain("ignore");
-      expect(copilotFeatures).toContain("mcp");
-      expect(copilotFeatures).toContain("commands");
-      expect(copilotFeatures).toContain("subagents");
-      expect(copilotFeatures).toContain("skills");
-      expect(copilotFeatures).toContain("hooks");
-
-      expect(config.getFeatures("agentsmd")).toEqual(["rules"]);
-    });
-
-    it("should collect all unique features when calling getFeatures() without target in object mode", () => {
-      const config = createConfig({
-        targets: ["copilot", "agentsmd"],
-        features: {
-          copilot: ["commands", "rules"],
-          agentsmd: ["rules", "mcp"],
+        targets: {
+          claudecode: ["rules", "commands"],
+          cursor: ["rules", "mcp"],
         },
       });
 
       const features = config.getFeatures();
-      expect(features).toContain("commands");
       expect(features).toContain("rules");
+      expect(features).toContain("commands");
       expect(features).toContain("mcp");
       expect(features).not.toContain("*");
     });
 
-    it("should return all features when per-target has wildcard and getFeatures() is called without target", () => {
+    it("should report hasPerTargetFeatures true for object-form targets", () => {
       const config = createConfig({
-        targets: ["copilot", "agentsmd"],
-        features: {
-          copilot: ["commands"],
-          agentsmd: ["*"],
-        },
+        targets: { claudecode: ["rules"] },
       });
-
-      const features = config.getFeatures();
-      expect(features).toContain("rules");
-      expect(features).toContain("ignore");
-      expect(features).toContain("mcp");
-      expect(features).toContain("commands");
-      expect(features).toContain("subagents");
-      expect(features).toContain("skills");
-      expect(features).toContain("hooks");
+      expect(config.hasPerTargetFeatures()).toBe(true);
     });
 
-    it("should correctly identify per-target features configuration", () => {
-      const arrayConfig = createConfig({ features: ["rules", "commands"] });
-      expect(arrayConfig.hasPerTargetFeatures()).toBe(false);
+    it("should detect conflicting targets within the object form keys", () => {
+      expect(() =>
+        createConfig({
+          targets: {
+            claudecode: ["rules"],
+            "claudecode-legacy": ["rules"],
+          },
+        }),
+      ).toThrow(
+        "Conflicting targets: 'claudecode' and 'claudecode-legacy' cannot be used together. Please choose one.",
+      );
+    });
 
-      const objectConfig = createConfig({
-        features: {
-          copilot: ["commands"],
-        },
-      });
-      expect(objectConfig.hasPerTargetFeatures()).toBe(true);
+    it("should reject '*' as a key in object-form targets", () => {
+      expect(() =>
+        createConfig({
+          targets: { "*": ["rules"] } as unknown as ConfigParams["targets"],
+        }),
+      ).toThrow(/wildcard is only supported in the array form/);
+    });
+
+    it("should reject unknown target keys in the object form", () => {
+      expect(
+        () =>
+          createConfig({
+            // cspell:disable-next-line
+            targets: { cloudecode: ["rules"] } as unknown as ConfigParams["targets"],
+          }),
+        // cspell:disable-next-line
+      ).toThrow(/Unknown target 'cloudecode'/);
+    });
+
+    it("should reject object-form targets combined with any features (constructor-level guard)", () => {
+      // The helper only strips the *default* when an object form is detected,
+      // so an explicit `features` override still reaches the Config constructor.
+      expect(() =>
+        createConfig({
+          targets: { claudecode: ["rules"] },
+          features: ["rules"],
+        }),
+      ).toThrow(/when 'targets' is in object form, 'features' must be omitted/);
+    });
+  });
+
+  describe("assertTargetsFeaturesExclusive (schema-level mutual exclusivity)", () => {
+    it("rejects object-form targets combined with array-form features", () => {
+      expect(() =>
+        assertTargetsFeaturesExclusive({
+          targets: { claudecode: ["rules"] },
+          features: ["rules"],
+        }),
+      ).toThrow(/when 'targets' is in object form, 'features' must be omitted/);
+    });
+
+    it("accepts object-form targets alone", () => {
+      expect(() =>
+        assertTargetsFeaturesExclusive({
+          targets: { claudecode: ["rules"] },
+        }),
+      ).not.toThrow();
+    });
+
+    it("accepts array-form targets with array-form features", () => {
+      expect(() =>
+        assertTargetsFeaturesExclusive({
+          targets: ["claudecode"],
+          features: ["rules"],
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  describe("constructor-level guard for missing targets and features", () => {
+    it("should throw when both 'targets' and 'features' are undefined", () => {
+      expect(
+        () =>
+          new Config({
+            outputRoots: ["."],
+            verbose: false,
+            delete: false,
+            silent: false,
+          } as unknown as ConfigParams),
+      ).toThrow(/at least one of 'targets' or 'features' must be provided/);
+    });
+  });
+
+  describe("getInputRoot", () => {
+    let originalCwd: string;
+
+    beforeEach(() => {
+      originalCwd = process.cwd();
+    });
+
+    afterEach(() => {
+      process.chdir(originalCwd);
+    });
+
+    it("snapshots process.cwd() at construction time when no inputRoot is supplied", () => {
+      const config = createConfig({});
+      const snapshot = config.getInputRoot();
+      expect(isAbsolute(snapshot)).toBe(true);
+      expect(snapshot).toBe(originalCwd);
+      // Subsequent chdir calls must not affect the captured value.
+      // process.chdir to the parent directory which should always exist.
+      const parent = resolve(originalCwd, "..");
+      process.chdir(parent);
+      expect(config.getInputRoot()).toBe(snapshot);
+    });
+
+    it("preserves an absolute inputRoot exactly as supplied", () => {
+      const absolute = resolve(originalCwd, "some-absolute-path");
+      const config = createConfig({ inputRoot: absolute });
+      expect(config.getInputRoot()).toBe(absolute);
+    });
+
+    it("resolves a relative inputRoot to absolute against the construction-time cwd", () => {
+      const config = createConfig({ inputRoot: "./central-rules" });
+      const expected = resolve(originalCwd, "central-rules");
+      expect(config.getInputRoot()).toBe(expected);
+      expect(isAbsolute(config.getInputRoot())).toBe(true);
+      // Later chdir must not change the captured value.
+      const parent = resolve(originalCwd, "..");
+      process.chdir(parent);
+      expect(config.getInputRoot()).toBe(expected);
     });
   });
 });

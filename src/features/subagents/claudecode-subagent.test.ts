@@ -46,6 +46,49 @@ describe("ClaudecodeSubagentFrontmatterSchema", () => {
     expect(() => ClaudecodeSubagentFrontmatterSchema.parse(frontmatter)).not.toThrow();
   });
 
+  it("should accept the full set of Claude Code subagent frontmatter fields", () => {
+    const frontmatter = {
+      name: "test-agent",
+      description: "A test agent",
+      model: "fable",
+      tools: ["Read", "Write"],
+      disallowedTools: ["Bash"],
+      permissionMode: "default",
+      maxTurns: 20,
+      skills: ["skill-creator"],
+      color: "cyan",
+      memory: "project",
+      effort: "high",
+      isolation: "worktree",
+      background: true,
+      initialPrompt: "Start by reading the spec.",
+      mcpServers: { github: { command: "github-mcp" } },
+      hooks: { PreToolUse: [] },
+    };
+
+    expect(() => ClaudecodeSubagentFrontmatterSchema.parse(frontmatter)).not.toThrow();
+  });
+
+  it("should reject non-number maxTurns", () => {
+    const invalidFrontmatter = {
+      name: "test-agent",
+      description: "A test agent",
+      maxTurns: "x",
+    };
+
+    expect(() => ClaudecodeSubagentFrontmatterSchema.parse(invalidFrontmatter)).toThrow();
+  });
+
+  it("should reject non-boolean background", () => {
+    const invalidFrontmatter = {
+      name: "test-agent",
+      description: "A test agent",
+      background: "yes",
+    };
+
+    expect(() => ClaudecodeSubagentFrontmatterSchema.parse(invalidFrontmatter)).toThrow();
+  });
+
   it("should reject frontmatter missing required fields", () => {
     // Missing name
     const missingName = {
@@ -124,7 +167,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -146,7 +189,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -168,7 +211,7 @@ describe("ClaudecodeSubagent", () => {
       expect(() => {
         // oxlint-disable-next-line eslint/no-new
         new ClaudecodeSubagent({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: ".claude/agents",
           relativeFilePath: "test-agent.md",
           frontmatter: invalidFrontmatter,
@@ -189,7 +232,7 @@ describe("ClaudecodeSubagent", () => {
       expect(() => {
         // oxlint-disable-next-line eslint/no-new
         new ClaudecodeSubagent({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeDirPath: ".claude/agents",
           relativeFilePath: "test-agent.md",
           frontmatter: invalidFrontmatter,
@@ -210,7 +253,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -231,7 +274,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "This is the agent body content";
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -252,7 +295,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -268,7 +311,7 @@ describe("ClaudecodeSubagent", () => {
     it("should return success when frontmatter is not set", () => {
       // Create subagent without validation
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter: undefined as any,
@@ -290,7 +333,7 @@ describe("ClaudecodeSubagent", () => {
       } as any;
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter: invalidFrontmatter,
@@ -314,7 +357,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Agent body content";
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -346,7 +389,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Agent body content";
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -363,14 +406,14 @@ describe("ClaudecodeSubagent", () => {
       expect(rulesyncFrontmatter.claudecode?.model).toBe("opus");
     });
 
-    it("should preserve relativeFilePath and use project root as baseDir", () => {
+    it("should preserve relativeFilePath and use project root as outputRoot", () => {
       const frontmatter: ClaudecodeSubagentFrontmatter = {
         name: "test-agent",
         description: "A test agent",
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "custom/test-agent.md",
         frontmatter,
@@ -380,8 +423,8 @@ describe("ClaudecodeSubagent", () => {
 
       const rulesyncSubagent = subagent.toRulesyncSubagent();
 
-      // RulesyncSubagent baseDir is always the project root directory
-      expect(rulesyncSubagent.getBaseDir()).toBe(".");
+      // RulesyncSubagent outputRoot is always the project root directory
+      expect(rulesyncSubagent.getOutputRoot()).toBe(".");
       expect(rulesyncSubagent.getRelativeFilePath()).toBe("custom/test-agent.md");
     });
   });
@@ -403,7 +446,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Agent body content";
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -411,7 +454,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
         validate: true,
@@ -442,7 +485,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -450,7 +493,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
         validate: true,
@@ -474,7 +517,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Agent body content";
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -482,7 +525,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
         validate: true,
@@ -492,7 +535,7 @@ describe("ClaudecodeSubagent", () => {
       expect(frontmatter.model).toBe("haiku");
     });
 
-    it("should use default baseDir when not provided", () => {
+    it("should use default outputRoot when not provided", () => {
       const rulesyncFrontmatter: RulesyncSubagentFrontmatter = {
         targets: ["claudecode"],
         name: "test-agent",
@@ -500,7 +543,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -513,7 +556,7 @@ describe("ClaudecodeSubagent", () => {
         validate: true,
       });
 
-      expect(claudecodeSubagent.getBaseDir()).toBe(testDir);
+      expect(claudecodeSubagent.getOutputRoot()).toBe(testDir);
     });
 
     it("should use global paths when global is true", () => {
@@ -525,7 +568,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Global agent content";
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "global-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -533,7 +576,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
         validate: true,
@@ -554,7 +597,7 @@ describe("ClaudecodeSubagent", () => {
 
       const body = "Local agent content";
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "local-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -562,7 +605,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
         validate: true,
@@ -659,7 +702,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "test-agent.md",
         frontmatter: rulesyncFrontmatter,
@@ -667,7 +710,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
       }) as ClaudecodeSubagent;
@@ -694,7 +737,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -716,7 +759,7 @@ describe("ClaudecodeSubagent", () => {
 
     it("round-trip should preserve all fields", () => {
       const original = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "roundtrip.md",
         frontmatter: {
@@ -733,7 +776,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecode = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent: original,
       }) as ClaudecodeSubagent;
@@ -746,6 +789,72 @@ describe("ClaudecodeSubagent", () => {
       });
     });
 
+    it("should round-trip the full set of Claude Code subagent fields through the claudecode section", () => {
+      const original = new RulesyncSubagent({
+        outputRoot: testDir,
+        relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
+        relativeFilePath: "full-fields.md",
+        frontmatter: {
+          targets: ["claudecode"],
+          name: "full-agent",
+          description: "Full fields test",
+          claudecode: {
+            model: "fable",
+            tools: ["Read", "Write"],
+            disallowedTools: ["Bash"],
+            permissionMode: "default",
+            maxTurns: 20,
+            skills: ["skill-creator"],
+            color: "cyan",
+            memory: "project",
+            effort: "high",
+            isolation: "worktree",
+            background: true,
+            initialPrompt: "Start by reading the spec.",
+            mcpServers: { github: { command: "github-mcp" } },
+            hooks: { PreToolUse: [] },
+          },
+        },
+        body: "Body content",
+      });
+
+      const claudecode = ClaudecodeSubagent.fromRulesyncSubagent({
+        outputRoot: testDir,
+        relativeDirPath: ".claude/agents",
+        rulesyncSubagent: original,
+      }) as ClaudecodeSubagent;
+
+      const frontmatter = claudecode.getFrontmatter();
+      expect(frontmatter.disallowedTools).toEqual(["Bash"]);
+      expect(frontmatter.maxTurns).toBe(20);
+      expect(frontmatter.color).toBe("cyan");
+      expect(frontmatter.memory).toBe("project");
+      expect(frontmatter.effort).toBe("high");
+      expect(frontmatter.isolation).toBe("worktree");
+      expect(frontmatter.background).toBe(true);
+      expect(frontmatter.initialPrompt).toBe("Start by reading the spec.");
+      expect(frontmatter.mcpServers).toEqual({ github: { command: "github-mcp" } });
+      expect(frontmatter.hooks).toEqual({ PreToolUse: [] });
+
+      const backToRulesync = claudecode.toRulesyncSubagent();
+      expect(backToRulesync.getFrontmatter().claudecode).toEqual({
+        model: "fable",
+        tools: ["Read", "Write"],
+        disallowedTools: ["Bash"],
+        permissionMode: "default",
+        maxTurns: 20,
+        skills: ["skill-creator"],
+        color: "cyan",
+        memory: "project",
+        effort: "high",
+        isolation: "worktree",
+        background: true,
+        initialPrompt: "Start by reading the spec.",
+        mcpServers: { github: { command: "github-mcp" } },
+        hooks: { PreToolUse: [] },
+      });
+    });
+
     it("should not include claudecode section when no model or extra fields", () => {
       const frontmatter: ClaudecodeSubagentFrontmatter = {
         name: "test-agent",
@@ -753,7 +862,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const subagent = new ClaudecodeSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         relativeFilePath: "test-agent.md",
         frontmatter,
@@ -776,7 +885,7 @@ describe("ClaudecodeSubagent", () => {
       };
 
       const rulesyncSubagent = new RulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: RULESYNC_SUBAGENTS_RELATIVE_DIR_PATH,
         relativeFilePath: "empty-test.md",
         frontmatter: rulesyncFrontmatter,
@@ -784,7 +893,7 @@ describe("ClaudecodeSubagent", () => {
       });
 
       const claudecodeSubagent = ClaudecodeSubagent.fromRulesyncSubagent({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".claude/agents",
         rulesyncSubagent,
       }) as ClaudecodeSubagent;
@@ -816,7 +925,7 @@ describe("ClaudecodeSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await ClaudecodeSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "file-test-agent.md",
         validate: true,
       });
@@ -826,10 +935,10 @@ describe("ClaudecodeSubagent", () => {
       expect(subagent.getBody()).toBe(body);
       expect(subagent.getRelativeFilePath()).toBe("file-test-agent.md");
       expect(subagent.getRelativeDirPath()).toBe(".claude/agents");
-      expect(subagent.getBaseDir()).toBe(testDir);
+      expect(subagent.getOutputRoot()).toBe(testDir);
     });
 
-    it("should use default baseDir when not provided", async () => {
+    it("should use default outputRoot when not provided", async () => {
       const frontmatter: ClaudecodeSubagentFrontmatter = {
         name: "default-base-agent",
         description: "An agent with default base dir",
@@ -849,7 +958,7 @@ describe("ClaudecodeSubagent", () => {
         validate: true,
       });
 
-      expect(subagent.getBaseDir()).toBe(testDir);
+      expect(subagent.getOutputRoot()).toBe(testDir);
     });
 
     it("should throw error for file with invalid frontmatter", async () => {
@@ -869,7 +978,7 @@ describe("ClaudecodeSubagent", () => {
 
       await expect(
         ClaudecodeSubagent.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           relativeFilePath: "invalid-agent.md",
           validate: true,
         }),
@@ -891,7 +1000,7 @@ describe("ClaudecodeSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await ClaudecodeSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "incomplete-agent.md",
         validate: true,
       });
@@ -916,7 +1025,7 @@ describe("ClaudecodeSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await ClaudecodeSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "trim-test-agent.md",
         validate: true,
       });
@@ -939,7 +1048,7 @@ describe("ClaudecodeSubagent", () => {
       await writeFileContent(filePath, fileContent);
 
       const subagent = await ClaudecodeSubagent.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeFilePath: "global-test-agent.md",
         validate: true,
         global: true,

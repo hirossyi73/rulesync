@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://json.schemastore.org/pnpm-workspace.json
+packages:
+  - .
+
+allowBuilds:
+  "@openrouter/sdk": false
+  esbuild: false
+  simple-git-hooks: false
+  tldjs: false
+ignoreScripts: false
+minimumReleaseAge: 1440 # 1 day
+overrides:
+  gray-matter>js-yaml: 4.2.0
+patchedDependencies:
+  gray-matter@4.0.3: patches/gray-matter@4.0.3.patch

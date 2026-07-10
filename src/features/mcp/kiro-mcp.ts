@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { KIRO_MCP_FILE_NAME, KIRO_SETTINGS_DIR_PATH } from "../../constants/kiro-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { readFileContentOrNull } from "../../utils/file.js";
 import { RulesyncMcp } from "./rulesync-mcp.js";
@@ -26,22 +27,23 @@ export class KiroMcp extends ToolMcp {
 
   static getSettablePaths(): ToolMcpSettablePaths {
     return {
-      relativeDirPath: join(".kiro", "settings"),
-      relativeFilePath: "mcp.json",
+      relativeDirPath: KIRO_SETTINGS_DIR_PATH,
+      relativeFilePath: KIRO_MCP_FILE_NAME,
     };
   }
 
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolMcpFromFileParams): Promise<KiroMcp> {
     const paths = this.getSettablePaths();
     const fileContent =
-      (await readFileContentOrNull(join(baseDir, paths.relativeDirPath, paths.relativeFilePath))) ??
-      '{"mcpServers":{}}';
+      (await readFileContentOrNull(
+        join(outputRoot, paths.relativeDirPath, paths.relativeFilePath),
+      )) ?? '{"mcpServers":{}}';
 
     return new KiroMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -50,7 +52,7 @@ export class KiroMcp extends ToolMcp {
   }
 
   static fromRulesyncMcp({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncMcp,
     validate = true,
   }: ToolMcpFromRulesyncMcpParams): KiroMcp {
@@ -58,7 +60,7 @@ export class KiroMcp extends ToolMcp {
     const fileContent = JSON.stringify({ mcpServers: rulesyncMcp.getMcpServers() }, null, 2);
 
     return new KiroMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: paths.relativeDirPath,
       relativeFilePath: paths.relativeFilePath,
       fileContent,
@@ -77,12 +79,12 @@ export class KiroMcp extends ToolMcp {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolMcpForDeletionParams): KiroMcp {
     return new KiroMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",

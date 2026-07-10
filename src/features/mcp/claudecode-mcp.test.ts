@@ -2,10 +2,15 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RULESYNC_RELATIVE_DIR_PATH } from "../../constants/rulesync-paths.js";
+import {
+  RULESYNC_MCP_SCHEMA_URL,
+  RULESYNC_RELATIVE_DIR_PATH,
+} from "../../constants/rulesync-paths.js";
+import { createMockLogger } from "../../test-utils/mock-logger.js";
 import { setupTestDirectory } from "../../test-utils/test-directories.js";
-import { ensureDir, writeFileContent } from "../../utils/file.js";
+import { ensureDir, fileExists, readFileContent, writeFileContent } from "../../utils/file.js";
 import { ClaudecodeMcp } from "./claudecode-mcp.js";
+import { McpProcessor } from "./mcp-processor.js";
 import { RulesyncMcp } from "./rulesync-mcp.js";
 
 describe("ClaudecodeMcp", () => {
@@ -31,9 +36,16 @@ describe("ClaudecodeMcp", () => {
     });
 
     it("should return correct paths for global mode", () => {
+      // Per Claude Code docs (https://docs.claude.com/en/docs/claude-code/mcp),
+      // user-scope MCP servers are stored in ~/.claude.json at HOME root —
+      // NOT inside ~/.claude/. The earlier (≤ v8.17.0) path of
+      // `.claude/.claude.json` is now treated as a legacy read-only
+      // fallback in `fromFile` (with a deprecation warning) and is
+      // never modified by rulesync. Mirrors the backward-compatibility
+      // pattern from PR #333 (`RulesyncMcp.fromFile`).
       const paths = ClaudecodeMcp.getSettablePaths({ global: true });
 
-      expect(paths.relativeDirPath).toBe(".claude");
+      expect(paths.relativeDirPath).toBe(".");
       expect(paths.relativeFilePath).toBe(".claude.json");
     });
   });
@@ -52,7 +64,7 @@ describe("ClaudecodeMcp", () => {
 
     it("should return false in global mode", () => {
       const claudecodeMcp = new ClaudecodeMcp({
-        relativeDirPath: ".claude",
+        relativeDirPath: ".",
         relativeFilePath: ".claude.json",
         fileContent: JSON.stringify({ mcpServers: {} }),
         global: true,
@@ -63,7 +75,7 @@ describe("ClaudecodeMcp", () => {
 
     it("should return false when created via forDeletion with global: true", () => {
       const claudecodeMcp = ClaudecodeMcp.forDeletion({
-        relativeDirPath: ".claude",
+        relativeDirPath: ".",
         relativeFilePath: ".claude.json",
         global: true,
       });
@@ -95,13 +107,13 @@ describe("ClaudecodeMcp", () => {
       expect(claudecodeMcp.getFileContent()).toBe(validJsonContent);
     });
 
-    it("should create instance with custom baseDir", () => {
+    it("should create instance with custom outputRoot", () => {
       const validJsonContent = JSON.stringify({
         mcpServers: {},
       });
 
       const claudecodeMcp = new ClaudecodeMcp({
-        baseDir: "/custom/path",
+        outputRoot: "/custom/path",
         relativeDirPath: ".",
         relativeFilePath: ".mcp.json",
         fileContent: validJsonContent,
@@ -200,7 +212,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData, null, 2));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(claudecodeMcp).toBeInstanceOf(ClaudecodeMcp);
@@ -210,7 +222,7 @@ describe("ClaudecodeMcp", () => {
 
     it("should initialize empty mcpServers if file does not exist", async () => {
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(claudecodeMcp).toBeInstanceOf(ClaudecodeMcp);
@@ -227,7 +239,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(claudecodeMcp.getJson()).toEqual({
@@ -238,7 +250,7 @@ describe("ClaudecodeMcp", () => {
       });
     });
 
-    it("should create instance from file with custom baseDir", async () => {
+    it("should create instance from file with custom outputRoot", async () => {
       const customDir = join(testDir, "custom");
       await ensureDir(customDir);
 
@@ -253,7 +265,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(customDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: customDir,
+        outputRoot: customDir,
       });
 
       expect(claudecodeMcp.getFilePath()).toBe(join(customDir, ".mcp.json"));
@@ -272,7 +284,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: true,
       });
 
@@ -286,7 +298,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         validate: false,
       });
 
@@ -302,20 +314,17 @@ describe("ClaudecodeMcp", () => {
           },
         },
       };
-      await ensureDir(join(testDir, ".claude"));
-      await writeFileContent(
-        join(testDir, ".claude/.claude.json"),
-        JSON.stringify(jsonData, null, 2),
-      );
+      await writeFileContent(join(testDir, ".claude.json"), JSON.stringify(jsonData, null, 2));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
       expect(claudecodeMcp).toBeInstanceOf(ClaudecodeMcp);
       expect(claudecodeMcp.getJson()).toEqual(jsonData);
-      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude/.claude.json"));
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      expect(claudecodeMcp.isDeletable()).toBe(false);
     });
 
     it("should create instance from file in local mode (default)", async () => {
@@ -330,7 +339,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: false,
       });
 
@@ -340,13 +349,14 @@ describe("ClaudecodeMcp", () => {
 
     it("should initialize global config file if it does not exist", async () => {
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
       expect(claudecodeMcp).toBeInstanceOf(ClaudecodeMcp);
       expect(claudecodeMcp.getJson()).toEqual({ mcpServers: {} });
-      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude/.claude.json"));
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      expect(claudecodeMcp.isDeletable()).toBe(false);
     });
 
     it("should preserve non-mcpServers properties in global mode", async () => {
@@ -363,14 +373,13 @@ describe("ClaudecodeMcp", () => {
         },
         version: "1.0.0",
       };
-      await ensureDir(join(testDir, ".claude"));
       await writeFileContent(
-        join(testDir, ".claude/.claude.json"),
+        join(testDir, ".claude.json"),
         JSON.stringify(existingGlobalConfig, null, 2),
       );
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -386,6 +395,183 @@ describe("ClaudecodeMcp", () => {
         fontSize: 14,
       });
       expect((json as any).version).toBe("1.0.0");
+    });
+
+    it("should prefer recommended path when both recommended and legacy exist (global)", async () => {
+      // Mirrors the RulesyncMcp.fromFile precedent (PR #333).
+      const recommendedContent = {
+        mcpServers: { "recommended-server": { command: "node" } },
+      };
+      const legacyContent = {
+        mcpServers: { "legacy-server": { command: "node" } },
+      };
+      await writeFileContent(join(testDir, ".claude.json"), JSON.stringify(recommendedContent));
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(
+        join(testDir, ".claude", ".claude.json"),
+        JSON.stringify(legacyContent),
+      );
+
+      const logger = createMockLogger();
+      const claudecodeMcp = await ClaudecodeMcp.fromFile({
+        outputRoot: testDir,
+        global: true,
+        logger,
+      });
+
+      expect(claudecodeMcp.getJson()).toEqual(recommendedContent);
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      // No deprecation warning when recommended is used.
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to legacy path with deprecation warning when only legacy exists (global)", async () => {
+      // Also asserts byte-identity: fromFile is read-only on legacy by
+      // contract. Mirrors PR #333.
+      const legacyContent = {
+        mcpServers: { "legacy-server": { command: "node", args: ["legacy.js"] } },
+      };
+      const legacyPath = join(testDir, ".claude", ".claude.json");
+      const legacyOnDisk = JSON.stringify(legacyContent);
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(legacyPath, legacyOnDisk);
+
+      const logger = createMockLogger();
+      const claudecodeMcp = await ClaudecodeMcp.fromFile({
+        outputRoot: testDir,
+        global: true,
+        logger,
+      });
+
+      // Data loaded from the legacy path.
+      expect(claudecodeMcp.getJson()).toEqual(legacyContent);
+      // Instance reflects the legacy path so callers see where data came from.
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude", ".claude.json"));
+
+      // Deprecation warning fired with both paths in the message.
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const warnMessage = logger.warn.mock.calls[0]?.[0] as string;
+      expect(warnMessage).toContain(join(testDir, ".claude", ".claude.json"));
+      expect(warnMessage).toContain(join(testDir, ".claude.json"));
+      expect(warnMessage).toContain("deprecated");
+
+      // Read-only invariant: legacy file is byte-identical after read.
+      // Confirms fromFile never writes to the legacy path.
+      expect(await readFileContent(legacyPath)).toBe(legacyOnDisk);
+    });
+
+    it("should pass legacy fallback warnings through the processor path", async () => {
+      // Regression guard: `fromFile` warnings must surface through the
+      // real processor/CLI path, not just direct class calls.
+      const legacyContent = {
+        mcpServers: { "legacy-server": { command: "node", args: ["legacy.js"] } },
+      };
+      const legacyPath = join(testDir, ".claude", ".claude.json");
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(legacyPath, JSON.stringify(legacyContent));
+
+      const logger = createMockLogger();
+      const processor = new McpProcessor({
+        outputRoot: testDir,
+        toolTarget: "claudecode",
+        global: true,
+        logger,
+      });
+
+      const toolFiles = await processor.loadToolFiles();
+
+      expect(toolFiles).toHaveLength(1);
+      expect(toolFiles[0]?.getFilePath()).toBe(legacyPath);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const warnMessage = logger.warn.mock.calls[0]?.[0] as string;
+      expect(warnMessage).toContain(legacyPath);
+      expect(warnMessage).toContain(join(testDir, ".claude.json"));
+      expect(warnMessage).toContain("deprecated");
+    });
+
+    it("should NOT fall back to legacy path in local mode", async () => {
+      // Legacy fallback is a global-mode-only concession. Local mode
+      // reads `.mcp.json`, never `~/.claude/.claude.json`.
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(
+        join(testDir, ".claude", ".claude.json"),
+        JSON.stringify({ mcpServers: { "legacy-server": { command: "node" } } }),
+      );
+
+      const logger = createMockLogger();
+      const claudecodeMcp = await ClaudecodeMcp.fromFile({
+        outputRoot: testDir,
+        global: false,
+        logger,
+      });
+
+      expect(claudecodeMcp.getJson()).toEqual({ mcpServers: {} });
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("should initialize empty mcpServers when neither file exists (global)", async () => {
+      // Fresh install: neither recommended nor legacy exists. fromFile
+      // returns an empty-mcpServers instance at the recommended path
+      // with no deprecation warning.
+      const logger = createMockLogger();
+      const claudecodeMcp = await ClaudecodeMcp.fromFile({
+        outputRoot: testDir,
+        global: true,
+        logger,
+      });
+
+      expect(claudecodeMcp.getJson()).toEqual({ mcpServers: {} });
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("should work without a logger when reading the legacy path (global)", async () => {
+      // Pins the optional-logger contract.
+      const legacyContent = { mcpServers: { x: { command: "node" } } };
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(
+        join(testDir, ".claude", ".claude.json"),
+        JSON.stringify(legacyContent),
+      );
+
+      const claudecodeMcp = await ClaudecodeMcp.fromFile({
+        outputRoot: testDir,
+        global: true,
+      });
+
+      expect(claudecodeMcp.getJson()).toEqual(legacyContent);
+    });
+
+    it("should throw when only the legacy file exists and contains malformed JSON (global)", async () => {
+      // Pins the contract: corrupt legacy JSON throws on parse rather
+      // than silently falling through to an empty mcpServers.
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(join(testDir, ".claude", ".claude.json"), "{ broken json");
+
+      await expect(
+        ClaudecodeMcp.fromFile({
+          outputRoot: testDir,
+          global: true,
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("should throw when recommended file is malformed even if legacy is valid (global)", async () => {
+      // Pins the contract: legacy fallback only triggers when the
+      // recommended file is *absent*, not when present-but-corrupt.
+      await writeFileContent(join(testDir, ".claude.json"), "{ broken json");
+      await ensureDir(join(testDir, ".claude"));
+      await writeFileContent(
+        join(testDir, ".claude", ".claude.json"),
+        JSON.stringify({ mcpServers: { x: { command: "node" } } }),
+      );
+
+      await expect(
+        ClaudecodeMcp.fromFile({
+          outputRoot: testDir,
+          global: true,
+        }),
+      ).rejects.toThrow();
     });
   });
 
@@ -406,7 +592,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
       });
 
@@ -416,7 +602,7 @@ describe("ClaudecodeMcp", () => {
       expect(claudecodeMcp.getRelativeFilePath()).toBe(".mcp.json");
     });
 
-    it("should create instance from RulesyncMcp with custom baseDir", async () => {
+    it("should create instance from RulesyncMcp with custom outputRoot", async () => {
       const jsonData = {
         mcpServers: {
           "custom-server": {
@@ -429,7 +615,7 @@ describe("ClaudecodeMcp", () => {
         },
       };
       const rulesyncMcp = new RulesyncMcp({
-        baseDir: "/custom/base",
+        outputRoot: "/custom/base",
         relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify(jsonData),
@@ -438,7 +624,7 @@ describe("ClaudecodeMcp", () => {
       const customDir = join(testDir, "target");
       await ensureDir(customDir);
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: customDir,
+        outputRoot: customDir,
         rulesyncMcp,
       });
 
@@ -462,7 +648,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         validate: true,
       });
@@ -481,7 +667,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         validate: false,
       });
@@ -500,7 +686,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
       });
 
@@ -523,15 +709,16 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
 
       expect(claudecodeMcp).toBeInstanceOf(ClaudecodeMcp);
       expect(claudecodeMcp.getJson()).toEqual(jsonData);
-      expect(claudecodeMcp.getRelativeDirPath()).toBe(".claude");
+      expect(claudecodeMcp.getRelativeDirPath()).toBe(".");
       expect(claudecodeMcp.getRelativeFilePath()).toBe(".claude.json");
+      expect(claudecodeMcp.isDeletable()).toBe(false);
     });
 
     it("should create instance from RulesyncMcp in local mode (default)", async () => {
@@ -550,7 +737,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: false,
       });
@@ -574,9 +761,8 @@ describe("ClaudecodeMcp", () => {
         },
         version: "1.0.0",
       };
-      await ensureDir(join(testDir, ".claude"));
       await writeFileContent(
-        join(testDir, ".claude/.claude.json"),
+        join(testDir, ".claude.json"),
         JSON.stringify(existingGlobalConfig, null, 2),
       );
 
@@ -595,7 +781,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -623,9 +809,8 @@ describe("ClaudecodeMcp", () => {
         },
         customProperty: "value",
       };
-      await ensureDir(join(testDir, ".claude"));
       await writeFileContent(
-        join(testDir, ".claude/.claude.json"),
+        join(testDir, ".claude.json"),
         JSON.stringify(existingGlobalConfig, null, 2),
       );
 
@@ -648,7 +833,7 @@ describe("ClaudecodeMcp", () => {
       });
 
       const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
@@ -666,6 +851,143 @@ describe("ClaudecodeMcp", () => {
         },
       });
       expect((json as any).customProperty).toBe("value");
+    });
+
+    it("should initialize ~/.claude.json on fresh install (no legacy, no existing config)", async () => {
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: {
+            "fresh-server": { command: "node", args: ["fresh.js"] },
+          },
+        }),
+      });
+
+      const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      // Canonical file is the new path, populated with rulesync source.
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      expect(claudecodeMcp.getJson()).toEqual({
+        mcpServers: {
+          "fresh-server": { command: "node", args: ["fresh.js"] },
+        },
+      });
+      // Legacy path stays absent.
+      expect(await fileExists(join(testDir, ".claude", ".claude.json"))).toBe(false);
+    });
+
+    it("should NOT modify the legacy file when writing to recommended path (global)", async () => {
+      // Pins the no-destructive-action invariant (precedent PR #333).
+      await ensureDir(join(testDir, ".claude"));
+      const legacyContent = JSON.stringify(
+        {
+          mcpServers: { "stale-server": { command: "node", args: ["stale.js"] } },
+          userAddedAtLegacyPath: { important: true },
+        },
+        null,
+        2,
+      );
+      const legacyPath = join(testDir, ".claude", ".claude.json");
+      await writeFileContent(legacyPath, legacyContent);
+
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: { "new-server": { command: "node", args: ["new.js"] } },
+        }),
+      });
+
+      const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      // Recommended path has fresh mcpServers from rulesync source.
+      expect(claudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
+      expect(claudecodeMcp.getJson()).toEqual({
+        mcpServers: { "new-server": { command: "node", args: ["new.js"] } },
+      });
+      // Legacy file unchanged — byte-for-byte.
+      const after = await readFileContent(legacyPath);
+      expect(after).toBe(legacyContent);
+    });
+
+    it("should not touch ~/.claude/.claude.json in local mode (content preserved verbatim)", async () => {
+      // Legacy file unchanged byte-for-byte in local mode.
+      await ensureDir(join(testDir, ".claude"));
+      const legacyContent = JSON.stringify({
+        mcpServers: { other: { command: "node" } },
+      });
+      const legacyPath = join(testDir, ".claude", ".claude.json");
+      await writeFileContent(legacyPath, legacyContent);
+
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: { local: { command: "node" } },
+        }),
+      });
+
+      await ClaudecodeMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: false,
+      });
+
+      // Legacy file content unchanged by local-mode generate.
+      const after = await readFileContent(legacyPath);
+      expect(after).toBe(legacyContent);
+    });
+
+    it("should preserve unrelated keys on ~/.claude.json (global mode)", async () => {
+      // RMW must preserve Claude Code's own keys (`projects`, `hooks`,
+      // `feedbackSurveyState`, etc.) while replacing only `mcpServers`.
+      const existingClaudeJson = {
+        mcpServers: {
+          "old-managed": { command: "node", args: ["old.js"] },
+        },
+        projects: { "/home/user/proj-a": { allowedTools: ["*"] } },
+        hooks: { PreToolUse: [] },
+        feedbackSurveyState: { lastShownAt: 1234567890 },
+      };
+      await writeFileContent(
+        join(testDir, ".claude.json"),
+        JSON.stringify(existingClaudeJson, null, 2),
+      );
+
+      const rulesyncMcp = new RulesyncMcp({
+        relativeDirPath: RULESYNC_RELATIVE_DIR_PATH,
+        relativeFilePath: ".mcp.json",
+        fileContent: JSON.stringify({
+          mcpServers: { "fresh-server": { command: "python" } },
+        }),
+      });
+
+      const claudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
+        outputRoot: testDir,
+        rulesyncMcp,
+        global: true,
+      });
+
+      const json = claudecodeMcp.getJson();
+      // mcpServers replaced with rulesync source.
+      expect(json.mcpServers).toEqual({
+        "fresh-server": { command: "python" },
+      });
+      // Non-mcp keys preserved verbatim.
+      expect((json as any).projects).toEqual({
+        "/home/user/proj-a": { allowedTools: ["*"] },
+      });
+      expect((json as any).hooks).toEqual({ PreToolUse: [] });
+      expect((json as any).feedbackSurveyState).toEqual({ lastShownAt: 1234567890 });
     });
   });
 
@@ -688,9 +1010,18 @@ describe("ClaudecodeMcp", () => {
       const rulesyncMcp = claudecodeMcp.toRulesyncMcp();
 
       expect(rulesyncMcp).toBeInstanceOf(RulesyncMcp);
-      expect(rulesyncMcp.getFileContent()).toBe(JSON.stringify(jsonData, null, 2));
+      expect(rulesyncMcp.getFileContent()).toBe(
+        JSON.stringify(
+          {
+            $schema: RULESYNC_MCP_SCHEMA_URL,
+            ...jsonData,
+          },
+          null,
+          2,
+        ),
+      );
       expect(rulesyncMcp.getRelativeDirPath()).toBe(RULESYNC_RELATIVE_DIR_PATH);
-      expect(rulesyncMcp.getRelativeFilePath()).toBe(".mcp.json");
+      expect(rulesyncMcp.getRelativeFilePath()).toBe("mcp.json");
     });
 
     it("should preserve file content when converting to RulesyncMcp", () => {
@@ -711,7 +1042,7 @@ describe("ClaudecodeMcp", () => {
         },
       };
       const claudecodeMcp = new ClaudecodeMcp({
-        baseDir: "/test/dir",
+        outputRoot: "/test/dir",
         relativeDirPath: ".",
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify(jsonData),
@@ -719,8 +1050,11 @@ describe("ClaudecodeMcp", () => {
 
       const rulesyncMcp = claudecodeMcp.toRulesyncMcp();
 
-      expect(rulesyncMcp.getBaseDir()).toBe("/test/dir");
-      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual(jsonData);
+      expect(rulesyncMcp.getOutputRoot()).toBe("/test/dir");
+      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual({
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+        ...jsonData,
+      });
     });
 
     it("should handle empty mcpServers object when converting", () => {
@@ -735,7 +1069,10 @@ describe("ClaudecodeMcp", () => {
 
       const rulesyncMcp = claudecodeMcp.toRulesyncMcp();
 
-      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual(jsonData);
+      expect(JSON.parse(rulesyncMcp.getFileContent())).toEqual({
+        $schema: RULESYNC_MCP_SCHEMA_URL,
+        ...jsonData,
+      });
     });
 
     it("should extract only mcpServers when converting to RulesyncMcp", () => {
@@ -767,6 +1104,7 @@ describe("ClaudecodeMcp", () => {
             args: ["server.js"],
           },
         },
+        $schema: RULESYNC_MCP_SCHEMA_URL,
       });
       expect((exportedJson as any).userSettings).toBeUndefined();
       expect((exportedJson as any).version).toBeUndefined();
@@ -872,7 +1210,7 @@ describe("ClaudecodeMcp", () => {
 
       // Step 1: Load from file
       const originalClaudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       // Step 2: Convert to RulesyncMcp
@@ -880,7 +1218,7 @@ describe("ClaudecodeMcp", () => {
 
       // Step 3: Create new ClaudecodeMcp from RulesyncMcp
       const newClaudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
       });
 
@@ -918,7 +1256,7 @@ describe("ClaudecodeMcp", () => {
 
       // Create ClaudecodeMcp
       const claudecodeMcp = new ClaudecodeMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         relativeDirPath: ".",
         relativeFilePath: ".mcp.json",
         fileContent: JSON.stringify(complexJsonData),
@@ -942,15 +1280,14 @@ describe("ClaudecodeMcp", () => {
           },
         },
       };
-      await ensureDir(join(testDir, ".claude"));
       await writeFileContent(
-        join(testDir, ".claude/.claude.json"),
+        join(testDir, ".claude.json"),
         JSON.stringify(originalJsonData, null, 2),
       );
 
       // Step 1: Load from global config
       const originalClaudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
         global: true,
       });
 
@@ -959,14 +1296,14 @@ describe("ClaudecodeMcp", () => {
 
       // Step 3: Create new ClaudecodeMcp from RulesyncMcp in global mode
       const newClaudecodeMcp = await ClaudecodeMcp.fromRulesyncMcp({
-        baseDir: testDir,
+        outputRoot: testDir,
         rulesyncMcp,
         global: true,
       });
 
       // Verify data integrity
       expect(newClaudecodeMcp.getJson()).toEqual(originalJsonData);
-      expect(newClaudecodeMcp.getFilePath()).toBe(join(testDir, ".claude/.claude.json"));
+      expect(newClaudecodeMcp.getFilePath()).toBe(join(testDir, ".claude.json"));
     });
   });
 
@@ -976,18 +1313,17 @@ describe("ClaudecodeMcp", () => {
 
       await expect(
         ClaudecodeMcp.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });
 
     it("should handle malformed JSON in global config gracefully", async () => {
-      await ensureDir(join(testDir, ".claude"));
-      await writeFileContent(join(testDir, ".claude/.claude.json"), "{ invalid: json }");
+      await writeFileContent(join(testDir, ".claude.json"), "{ invalid: json }");
 
       await expect(
         ClaudecodeMcp.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
           global: true,
         }),
       ).rejects.toThrow();
@@ -1000,7 +1336,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(claudecodeMcp.getJson().mcpServers).toEqual({});
@@ -1013,7 +1349,7 @@ describe("ClaudecodeMcp", () => {
       await writeFileContent(join(testDir, ".mcp.json"), JSON.stringify(jsonData));
 
       const claudecodeMcp = await ClaudecodeMcp.fromFile({
-        baseDir: testDir,
+        outputRoot: testDir,
       });
 
       expect(claudecodeMcp.getJson().mcpServers).toEqual({});
@@ -1025,7 +1361,7 @@ describe("ClaudecodeMcp", () => {
 
       await expect(
         ClaudecodeMcp.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });
@@ -1035,7 +1371,7 @@ describe("ClaudecodeMcp", () => {
 
       await expect(
         ClaudecodeMcp.fromFile({
-          baseDir: testDir,
+          outputRoot: testDir,
         }),
       ).rejects.toThrow();
     });

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { COPILOT_MCP_DIR, COPILOT_MCP_FILE_NAME } from "../../constants/copilot-paths.js";
 import { ValidationResult } from "../../types/ai-file.js";
 import { McpServers } from "../../types/mcp.js";
 import { readFileContent } from "../../utils/file.js";
@@ -12,8 +13,6 @@ import {
   ToolMcpParams,
   ToolMcpSettablePaths,
 } from "./tool-mcp.js";
-
-export type CopilotMcpParams = ToolMcpParams;
 
 type CopilotMcpConfig = {
   servers?: McpServers;
@@ -41,24 +40,24 @@ export class CopilotMcp extends ToolMcp {
 
   static getSettablePaths(): ToolMcpSettablePaths {
     return {
-      relativeDirPath: ".vscode",
-      relativeFilePath: "mcp.json",
+      relativeDirPath: COPILOT_MCP_DIR,
+      relativeFilePath: COPILOT_MCP_FILE_NAME,
     };
   }
   static async fromFile({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     validate = true,
   }: ToolMcpFromFileParams): Promise<CopilotMcp> {
     const fileContent = await readFileContent(
       join(
-        baseDir,
+        outputRoot,
         this.getSettablePaths().relativeDirPath,
         this.getSettablePaths().relativeFilePath,
       ),
     );
 
     return new CopilotMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent,
@@ -67,13 +66,13 @@ export class CopilotMcp extends ToolMcp {
   }
 
   static fromRulesyncMcp({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     rulesyncMcp,
     validate = true,
   }: ToolMcpFromRulesyncMcpParams): CopilotMcp {
     const copilotConfig = convertToCopilotFormat(rulesyncMcp.getMcpServers());
     return new CopilotMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath: this.getSettablePaths().relativeDirPath,
       relativeFilePath: this.getSettablePaths().relativeFilePath,
       fileContent: JSON.stringify(copilotConfig, null, 2),
@@ -93,12 +92,12 @@ export class CopilotMcp extends ToolMcp {
   }
 
   static forDeletion({
-    baseDir = process.cwd(),
+    outputRoot = process.cwd(),
     relativeDirPath,
     relativeFilePath,
   }: ToolMcpForDeletionParams): CopilotMcp {
     return new CopilotMcp({
-      baseDir,
+      outputRoot,
       relativeDirPath,
       relativeFilePath,
       fileContent: "{}",
