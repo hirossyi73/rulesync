@@ -1,6 +1,6 @@
 {
-  "name": "rulesync",
-  "version": "9.6.0",
+  "name": "@hirossyi73/rulesync",
+  "version": "9.6.0-hirossyi.1",
   "description": "Unified AI rules management CLI tool that generates configuration files for various AI development tools",
   "keywords": [
     "ai",
@@ -12,13 +12,13 @@
     "development",
     "rules"
   ],
-  "homepage": "https://github.com/dyoshikawa/rulesync#readme",
+  "homepage": "https://github.com/hirossyi73/rulesync#readme",
   "bugs": {
-    "url": "https://github.com/dyoshikawa/rulesync/issues"
+    "url": "https://github.com/hirossyi73/rulesync/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dyoshikawa/rulesync.git"
+    "url": "https://github.com/hirossyi73/rulesync.git"
   },
   "license": "MIT",
   "author": "dyoshikawa",
@@ -68,7 +68,7 @@
     "oxlint": "oxlint . --max-warnings 0",
     "oxlint:fix": "oxlint . --fix --max-warnings 0",
     "pr-continuation": "tsx scripts/pr-continuation.ts",
-    "prepare": "simple-git-hooks && pnpm run build && pnpm generate",
+    "prepare": "simple-git-hooks",
     "prepublishOnly": "pnpm build",
     "secretlint": "secretlint --secretlintignore .gitignore \"**/*\"",
     "sort": "sort-package-json",
@@ -131,6 +131,6 @@
     "pnpm": ">=10"
   },
   "publishConfig": {
-    "access": "public"
+    "registry": "https://npm.pkg.github.com"
   }
 }
